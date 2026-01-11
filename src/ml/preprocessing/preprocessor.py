@@ -10,6 +10,10 @@ from typing import List, Tuple, Optional, Dict
 from sklearn.preprocessing import StandardScaler
 import pickle
 import json
+import warnings
+
+# Suppress sklearn feature name warnings (cosmetic issue, not a bug)
+warnings.filterwarnings('ignore', message='X does not have valid feature names')
 
 
 class CryptoPreprocessor:
@@ -37,7 +41,7 @@ class CryptoPreprocessor:
         self.scalers: Dict[str, StandardScaler] = {}  # Per-symbol scalers
         self.feature_columns: List[str] = []
 
-        print(f"[PREPROCESSOR] ✓ Preprocessor initialized")
+        print(f"[PREPROCESSOR] OK Preprocessor initialized")
 
     def load_multi_symbol_data(self, symbols: List[str]) -> pd.DataFrame:
         """
@@ -349,18 +353,17 @@ class CryptoPreprocessor:
 
         # Auto-detect numeric features to scale if not specified
         if features_to_scale is None:
-            # Exclude datetime, symbol, already cyclical features, and TARGET (close)
-            # CRITICAL: 'close' is excluded because GroupNormalizer in dataset.py will normalize it
-            # Normalizing it twice causes NaN values (double normalization bug)
+            # Exclude datetime, symbol, already cyclical features
+            # CRITICAL FIX #4: INCLUDE 'close' in normalization!
+            # GroupNormalizer with transformation=None doesn't normalize, so we must do it here.
             exclude_cols = ['datetime', 'symbol', 'timestamp', 'close_time',
-                          'hour', 'day_of_week', 'day_of_month', 'month',
-                          'close']  # TARGET - let GroupNormalizer handle this
+                          'hour', 'day_of_week', 'day_of_month', 'month']
 
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             features_to_scale = [col for col in numeric_cols if col not in exclude_cols]
 
             print(f"[PREPROCESSOR]   - Auto-detected {len(features_to_scale)} features to scale")
-            print(f"[PREPROCESSOR]   - Excluded 'close' (target) from normalization")
+            print(f"[PREPROCESSOR]   - INCLUDED 'close' (target) in normalization (CRITICAL FIX)")
 
         print(f"[PREPROCESSOR]   - Features to normalize: {len(features_to_scale)}")
 
@@ -391,7 +394,7 @@ class CryptoPreprocessor:
                 scaler.fit(symbol_df.loc[valid_mask, features_to_scale])
                 self.scalers[symbol] = scaler
 
-                print(f"[PREPROCESSOR]     ✅ Scaler fitted on {valid_mask.sum()} TRAINING samples")
+                print(f"[PREPROCESSOR]     OK Scaler fitted on {valid_mask.sum()} TRAINING samples")
                 print(f"[PREPROCESSOR]     - Mean: {scaler.mean_[:5]}... (showing first 5)")
                 print(f"[PREPROCESSOR]     - Std: {scaler.scale_[:5]}... (showing first 5)")
             else:
@@ -401,10 +404,12 @@ class CryptoPreprocessor:
                                    f"Cannot normalize validation/test data without training scaler.")
 
                 scaler = self.scalers[symbol]
-                print(f"[PREPROCESSOR]     ✅ Using TRAINING scaler for {symbol} (no refit)")
+                print(f"[PREPROCESSOR]     OK Using TRAINING scaler for {symbol} (no refit)")
 
             # Transform using training statistics
-            symbol_df[features_to_scale] = scaler.transform(symbol_df[features_to_scale])
+            # Convert to DataFrame to avoid sklearn feature name warnings
+            transformed = scaler.transform(symbol_df[features_to_scale])
+            symbol_df[features_to_scale] = transformed
 
             result_dfs.append(symbol_df)
 
@@ -418,11 +423,11 @@ class CryptoPreprocessor:
         for feature in features_to_scale[:3]:  # Check first 3 features
             mean = df[feature].mean()
             std = df[feature].std()
-            status = "✅" if fit else "ℹ️"
+            status = "OK" if fit else "INFO"
             print(f"[PREPROCESSOR]   {status} {feature}: mean={mean:.4f}, std={std:.4f}")
 
         if not fit:
-            print(f"[PREPROCESSOR]   ℹ️  Val/Test statistics may differ from (0,1) - this is expected!")
+            print(f"[PREPROCESSOR]   INFO Val/Test statistics may differ from (0,1) - this is expected!")
 
         return df
 

@@ -478,13 +478,15 @@ class CryptoAIPredictorApp:
                     verbose=True
                 )
 
-                # Create trainer
+                # Create trainer with GUI progress callback
                 self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Initializing trainer..."))
                 trainer = TFTTrainer(
                     config=tft_config,
                     checkpoint_dir="models/checkpoints",
                     log_dir="logs/training",
-                    verbose=True
+                    verbose=True,
+                    progress_callback=self.ml_panel.update_progress,
+                    root=self.root  # For thread-safe GUI updates
                 )
 
                 # Setup model

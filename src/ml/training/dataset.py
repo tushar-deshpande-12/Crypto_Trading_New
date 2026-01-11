@@ -204,6 +204,9 @@ class CryptoTimeSeriesDataset:
             print(f"[DATASET]   - Training cutoff: {training_cutoff.max()}")
 
         try:
+            # CRITICAL FIX #4: Remove target_normalizer entirely!
+            # The preprocessor already normalized 'close' with StandardScaler.
+            # GroupNormalizer would DENORMALIZE it back to raw values, causing massive loss.
             dataset = TimeSeriesDataSet(
                 self.data,
                 time_idx='time_idx',
@@ -214,10 +217,7 @@ class CryptoTimeSeriesDataset:
                 time_varying_known_reals=self.time_varying_known_reals,
                 time_varying_unknown_reals=self.time_varying_unknown_reals,
                 static_categoricals=self.static_categoricals,
-                target_normalizer=GroupNormalizer(
-                    groups=['symbol'] if 'symbol' in self.static_categoricals else [],
-                    transformation='softplus'  # Ensures positive predictions
-                ),
+                # NO target_normalizer - data is already normalized by StandardScaler!
                 add_relative_time_idx=True,
                 add_target_scales=True,
                 add_encoder_length=True,
@@ -317,8 +317,8 @@ def create_dataloaders(
     # Create validation dataset (using same parameters as training)
     # CRITICAL FIX #2: Use predict=True and stop_randomization=True to prevent data augmentation
     print(f"\n[DATASET] Creating validation dataset...")
-    print(f"[DATASET]   ℹ️  Using predict=True to inherit TRAINING normalizer (no refit)")
-    print(f"[DATASET]   ℹ️  Using stop_randomization=True to prevent augmentation")
+    print(f"[DATASET]   INFO  Using predict=True to inherit TRAINING normalizer (no refit)")
+    print(f"[DATASET]   INFO  Using stop_randomization=True to prevent augmentation")
     val_dataset_obj = TimeSeriesDataSet.from_dataset(
         train_dataset.dataset,
         val_data,
@@ -328,8 +328,8 @@ def create_dataloaders(
 
     # Create test dataset
     print(f"\n[DATASET] Creating test dataset...")
-    print(f"[DATASET]   ℹ️  Using predict=True to inherit TRAINING normalizer (no refit)")
-    print(f"[DATASET]   ℹ️  Using stop_randomization=True to prevent augmentation")
+    print(f"[DATASET]   INFO  Using predict=True to inherit TRAINING normalizer (no refit)")
+    print(f"[DATASET]   INFO  Using stop_randomization=True to prevent augmentation")
     test_dataset_obj = TimeSeriesDataSet.from_dataset(
         train_dataset.dataset,
         test_data,
@@ -343,26 +343,26 @@ def create_dataloaders(
     # Training loader: shuffle=True, augmentation enabled
     train_loader = train_dataset.get_dataloader(
         batch_size=batch_size,
-        shuffle=True,  # ✅ Shuffle training data
+        shuffle=True,  # OK Shuffle training data
         num_workers=0  # Set to 0 to avoid multiprocessing issues on Windows
     )
-    print(f"[DATASET]   ✅ Train loader: shuffle=True (training mode)")
+    print(f"[DATASET]   OK Train loader: shuffle=True (training mode)")
 
     # CRITICAL FIX #2: Validation loader must NOT shuffle data
     val_loader = val_dataset_obj.to_dataloader(
-        train=False,  # ✅ NO shuffling, NO augmentation
+        train=False,  # OK NO shuffling, NO augmentation
         batch_size=batch_size,
         num_workers=0
     )
-    print(f"[DATASET]   ✅ Validation loader: train=False (no shuffle, no augmentation)")
+    print(f"[DATASET]   OK Validation loader: train=False (no shuffle, no augmentation)")
 
     # Test loader: same as validation
     test_loader = test_dataset_obj.to_dataloader(
-        train=False,  # ✅ NO shuffling, NO augmentation
+        train=False,  # OK NO shuffling, NO augmentation
         batch_size=batch_size,
         num_workers=0
     )
-    print(f"[DATASET]   ✅ Test loader: train=False (no shuffle, no augmentation)")
+    print(f"[DATASET]   OK Test loader: train=False (no shuffle, no augmentation)")
 
     print(f"\n[DATASET] ✓ All DataLoaders created successfully")
     print(f"[DATASET]   - Train batches: {len(train_loader)}")
@@ -460,7 +460,7 @@ def validate_data_format(dataloader, verbose: bool = True) -> bool:
         return False
     else:
         if verbose:
-            print(f"\n✅ STEP 1 PASSED: Data format is valid")
+            print(f"\nOK STEP 1 PASSED: Data format is valid")
         return True
 
 
@@ -539,7 +539,7 @@ def validate_target_normalization(dataloader, verbose: bool = True) -> bool:
         return not any("❌" in issue for issue in issues)
     else:
         if verbose:
-            print(f"\n✅ STEP 4 PASSED: Target normalization looks reasonable")
+            print(f"\nOK STEP 4 PASSED: Target normalization looks reasonable")
         return True
 
 

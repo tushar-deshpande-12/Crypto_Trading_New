@@ -385,7 +385,7 @@ def validate_loss_function(model, dataloader, verbose: bool = True) -> bool:
     """
     try:
         import torch
-        from pytorch_forecasting.metrics import QuantileLoss
+        from pytorch_forecasting.metrics import RMSE
     except ImportError:
         print("[VALIDATION] PyTorch not available, skipping loss validation")
         return False
@@ -399,8 +399,10 @@ def validate_loss_function(model, dataloader, verbose: bool = True) -> bool:
         # CRITICAL FIX #3: Explicitly set model to eval mode and use no_grad
         model.eval()
         if verbose:
-            print(f"[VALIDATION]   ✅ Model set to eval() mode")
-        loss_fn = QuantileLoss()
+            print(f"[VALIDATION]   OK Model set to eval() mode")
+
+        # CRITICAL FIX #7: Use RMSE loss (same as model training)
+        loss_fn = RMSE()
 
         # Get one batch
         batch_data = next(iter(dataloader))
@@ -413,7 +415,7 @@ def validate_loss_function(model, dataloader, verbose: bool = True) -> bool:
         # CRITICAL FIX #3: Use no_grad to prevent gradient computation during validation
         with torch.no_grad():
             if verbose:
-                print(f"[VALIDATION]   ✅ Using torch.no_grad() context")
+                print(f"[VALIDATION]   OK Using torch.no_grad() context")
             output = model(batch)
             target = batch['decoder_target']
 
@@ -428,6 +430,11 @@ def validate_loss_function(model, dataloader, verbose: bool = True) -> bool:
                 prediction = output[0]  # TFT returns (prediction, additional_outputs)
             else:
                 prediction = output
+
+            # For RMSE with output_size=1, prediction shape is (batch, time, 1)
+            # Squeeze last dimension to match target shape (batch, time)
+            if prediction.dim() == 3 and prediction.shape[-1] == 1:
+                prediction = prediction.squeeze(-1)
 
             # Test 1: Model prediction loss
             correct_loss = loss_fn(prediction, target).item()
@@ -469,7 +476,7 @@ def validate_loss_function(model, dataloader, verbose: bool = True) -> bool:
                 return False
             else:
                 if verbose:
-                    print(f"\n✅ STEP 2 PASSED: Loss function working correctly")
+                    print(f"\nOK STEP 2 PASSED: Loss function working correctly")
                 return True
 
     except Exception as e:
@@ -492,7 +499,7 @@ def validate_baseline_comparison(model, dataloader, verbose: bool = True) -> boo
     """
     try:
         import torch
-        from pytorch_forecasting.metrics import QuantileLoss
+        from pytorch_forecasting.metrics import RMSE
     except ImportError:
         print("[VALIDATION] PyTorch not available, skipping baseline validation")
         return False
@@ -505,8 +512,10 @@ def validate_baseline_comparison(model, dataloader, verbose: bool = True) -> boo
     # CRITICAL FIX #3: Explicitly set model to eval mode and use no_grad
     model.eval()
     if verbose:
-        print(f"[BASELINE]   ✅ Model set to eval() mode")
-    loss_fn = QuantileLoss()
+        print(f"[BASELINE]   OK Model set to eval() mode")
+
+    # CRITICAL FIX #7: Use RMSE loss (same as model training)
+    loss_fn = RMSE()
 
     model_losses = []
     random_losses = []
@@ -515,7 +524,7 @@ def validate_baseline_comparison(model, dataloader, verbose: bool = True) -> boo
     # CRITICAL FIX #3: Use no_grad to prevent gradient computation during validation
     with torch.no_grad():
         if verbose:
-            print(f"[BASELINE]   ✅ Using torch.no_grad() context")
+            print(f"[BASELINE]   OK Using torch.no_grad() context")
         for batch_idx, batch_data in enumerate(dataloader):
             # Handle both tuple and dict batch formats
             if isinstance(batch_data, tuple):
@@ -533,6 +542,11 @@ def validate_baseline_comparison(model, dataloader, verbose: bool = True) -> boo
                 prediction = output[0]  # TFT returns (prediction, additional_outputs)
             else:
                 prediction = output
+
+            # For RMSE with output_size=1, prediction shape is (batch, time, 1)
+            # Squeeze last dimension to match target shape (batch, time)
+            if prediction.dim() == 3 and prediction.shape[-1] == 1:
+                prediction = prediction.squeeze(-1)
 
             # Model loss
             model_loss = loss_fn(prediction, target).item()
@@ -590,7 +604,7 @@ def validate_baseline_comparison(model, dataloader, verbose: bool = True) -> boo
         return False
     else:
         if verbose:
-            print(f"\n✅ STEP 5 PASSED: Model beats baseline")
+            print(f"\nOK STEP 5 PASSED: Model beats baseline")
         return True
 
 

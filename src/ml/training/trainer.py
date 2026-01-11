@@ -19,6 +19,9 @@ try:
     # Suppress triton warnings (optional dependency for GPU kernels)
     warnings.filterwarnings('ignore', message='.*triton not found.*')
 
+    # Import GUI callback
+    from .gui_callback import GUIProgressCallback
+
     # Check Lightning version
     import importlib.metadata
     try:
@@ -54,7 +57,9 @@ class TFTTrainer:
         config: TFTConfig,
         checkpoint_dir: str = "models/checkpoints",
         log_dir: str = "logs/training",
-        verbose: bool = True
+        verbose: bool = True,
+        progress_callback: Optional[callable] = None,
+        root: Optional[any] = None
     ):
         """
         Initialize TFT trainer
@@ -64,16 +69,22 @@ class TFTTrainer:
             checkpoint_dir: Directory for model checkpoints
             log_dir: Directory for training logs
             verbose: Print detailed progress
+            progress_callback: Optional GUI callback(epoch, max_epochs, train_loss, val_loss)
+            root: Optional Tkinter root for thread-safe GUI updates
         """
         if not TORCH_AVAILABLE:
             raise ImportError("PyTorch not available")
 
         self.verbose = verbose
+        self.progress_callback = progress_callback
+        self.root = root
 
         if self.verbose:
             print(f"\n[TRAINER] Initializing TFTTrainer")
             print(f"[TRAINER]   - Checkpoint directory: {checkpoint_dir}")
             print(f"[TRAINER]   - Log directory: {log_dir}")
+            if progress_callback:
+                print(f"[TRAINER]   - GUI progress callback: Registered")
 
         self.config = config
         self.checkpoint_dir = Path(checkpoint_dir)
@@ -171,6 +182,16 @@ class TFTTrainer:
             lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
             callbacks = [checkpoint_callback, early_stop_callback, lr_monitor]
+
+            # Add GUI progress callback if provided
+            if self.progress_callback:
+                gui_callback = GUIProgressCallback(
+                    progress_callback=self.progress_callback,
+                    root=self.root
+                )
+                callbacks.append(gui_callback)
+                if self.verbose:
+                    print(f"[TRAINER]   OK GUI progress callback added to callbacks")
 
             # TensorBoard logger
             logger = None
@@ -273,7 +294,7 @@ class TFTTrainer:
             validation_results['data_format'] = validate_data_format(train_dataloader, verbose=self.verbose)
 
             # CRITICAL FIX #3: Explicitly set model to eval mode before validation
-            print(f"[TRAINER]   ℹ️  Setting model to eval() mode for validation checks...")
+            print(f"[TRAINER]   INFO  Setting model to eval() mode for validation checks...")
             self.model_wrapper.model.eval()
 
             # Step 2: Loss function
@@ -297,18 +318,18 @@ class TFTTrainer:
             print(f"[TRAINER] VALIDATION SUMMARY")
             print(f"[TRAINER] {'='*60}")
             for step, passed in validation_results.items():
-                status = "✅ PASS" if passed else "❌ FAIL"
+                status = "OK PASS" if passed else "❌ FAIL"
                 print(f"[TRAINER] {status} - {step}")
 
             if not all_passed:
                 print(f"\n[TRAINER] ⚠️  WARNING: Some validation checks failed!")
                 print(f"[TRAINER] Training will continue, but results may be poor.")
             else:
-                print(f"\n[TRAINER] ✅ All validation checks passed! Ready to train.")
+                print(f"\n[TRAINER] OK All validation checks passed! Ready to train.")
 
             # CRITICAL FIX #3: Set model back to training mode after validation checks
             self.model_wrapper.model.train()
-            print(f"[TRAINER]   ✅ Model set to train() mode for training")
+            print(f"[TRAINER]   OK Model set to train() mode for training")
 
         if self.verbose:
             print(f"\n[TRAINER] {'='*60}")
@@ -337,6 +358,21 @@ class TFTTrainer:
         try:
             # Get the model
             model = self.model_wrapper.model
+
+            # CRITICAL FIX #6: PyTorch Lightning handles train/eval mode switching automatically
+            # We just need to verify it's working by checking the model has normalization layers
+            has_norm_layers = False
+            for name, module in model.named_modules():
+                if 'norm' in name.lower() or isinstance(module, (torch.nn.BatchNorm1d, torch.nn.LayerNorm)):
+                    has_norm_layers = True
+                    if self.verbose:
+                        print(f"[TRAINER]   INFO Found normalization layer: {name}")
+                    break
+
+            if has_norm_layers and self.verbose:
+                print(f"[TRAINER]   OK Model has normalization layers - Lightning will handle train/eval switching")
+            elif self.verbose:
+                print(f"[TRAINER]   INFO No normalization layers found")
 
             # Start training
             if self.verbose:
