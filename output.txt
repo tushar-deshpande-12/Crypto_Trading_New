@@ -1,0 +1,213 @@
+W0111 19:05:13.917000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.917000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.918000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.918000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.918000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.919000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.921000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.921000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.922000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.922000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.922000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.922000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:05:13.923000 6368 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+Traceback (most recent call last):
+  File "C:\crypto\ver6\run_check.py", line 34, in <module>
+    train_loader, val_loader, _ = create_dataloaders(
+                                  ~~~~~~~~~~~~~~~~~~^
+        train_df, val_df, test_df,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        verbose=False
+        ^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\crypto\ver6\src\ml\training\dataset.py", line 310, in create_dataloaders
+    train_dataset = CryptoTimeSeriesDataset(
+        train_data,
+    ...<2 lines>...
+        verbose=verbose
+    )
+  File "C:\crypto\ver6\src\ml\training\dataset.py", line 100, in __init__
+    self.dataset = self._create_time_series_dataset()
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\crypto\ver6\src\ml\training\dataset.py", line 207, in _create_time_series_dataset
+    dataset = TimeSeriesDataSet(
+        self.data,
+    ...<14 lines>...
+        add_encoder_length=True,
+    )
+  File "C:\Users\dtush\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pytorch_forecasting\data\timeseries\_timeseries.py", line 655, in __init__
+    self._check_tensors(self.data)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "C:\Users\dtush\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pytorch_forecasting\data\timeseries\_timeseries.py", line 1514, in _check_tensors
+    check_for_nonfinite(tensor, var_names)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dtush\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pytorch_forecasting\data\timeseries\_timeseries.py", line 135, in check_for_nonfinite
+    raise ValueError(
+    ...<9 lines>...
+    )
+ValueError: 20695 (59.33%) of close values were found to be NA or infinite (even after encoding). NA values are not allowed `allow_missing_timesteps` refers to missing rows, not to missing values. Possible strategies to fix the issue are (a) dropping the variable close, (b) using `NaNLabelEncoder(add_nan=True)` for categorical variables, (c) filling missing values and/or (d) optionally adding a variable indicating filled values
+[TRAINER] Lightning version: 2.6.0
+
+[PREPROCESSOR] Initializing CryptoPreprocessor
+[PREPROCESSOR]   - Dataset directory: dataset
+[PREPROCESSOR] ✓ Preprocessor initialized
+
+============================================================
+STARTING COMPLETE PREPROCESSING PIPELINE
+============================================================
+
+[PREPROCESSOR] Loading data for 1 symbols: ['ETHUSDT']
+[PREPROCESSOR] [1/1] Loading ETHUSDT...
+[PREPROCESSOR]   - Using dataset: 2026-01-10_17-43-53_50000candles
+[PREPROCESSOR]   - Loaded 50000 rows
+[PREPROCESSOR]   - Columns: ['close', 'close_time', 'datetime', 'high', 'low', 'open', 'quote_volume', 'symbol', 'taker_buy_quote_volume', 'taker_buy_volume', 'timestamp', 'trades', 'volume']
+[PREPROCESSOR] ✓ ETHUSDT loaded successfully
+
+[PREPROCESSOR] Combining 1 datasets...
+[PREPROCESSOR] ✓ Combined dataset shape: (50000, 13)
+[PREPROCESSOR]   - Total rows: 50000
+[PREPROCESSOR]   - Symbols: ['ETHUSDT']
+[PREPROCESSOR]   - Date range: 2020-04-27 11:30:00 to 2026-01-10 17:30:00
+
+[PREPROCESSOR] Generating temporal features...
+[PREPROCESSOR]   - Input shape: (50000, 13)
+[PREPROCESSOR]   - Extracting hour, day, month...
+[PREPROCESSOR]   - Applying cyclical encoding...
+[PREPROCESSOR] ✓ Generated 8 temporal features
+[PREPROCESSOR]   - Features: ['hour_sin', 'hour_cos', 'day_of_week_sin', 'day_of_week_cos', 'day_of_month_sin', 'day_of_month_cos', 'month_sin', 'month_cos']
+[PREPROCESSOR]   - Output shape: (50000, 25)
+
+[PREPROCESSOR] Generating technical indicators...
+[PREPROCESSOR]   - Input shape: (50000, 25)
+[PREPROCESSOR]   - Processing ETHUSDT...
+[PREPROCESSOR] ✓ Generated 6 technical indicators
+[PREPROCESSOR]   - Features: ['returns', 'log_volume', 'log_quote_volume', 'price_range', 'trade_intensity', 'taker_buy_ratio']
+[PREPROCESSOR]   - Output shape: (50000, 31)
+[PREPROCESSOR]   - NaN values: 1
+
+[PREPROCESSOR] Generating lagged features...
+[PREPROCESSOR]   - Input shape: (50000, 31)
+[PREPROCESSOR]   - Lag periods: [1, 24, 168]
+[PREPROCESSOR]   - Processing ETHUSDT...
+[PREPROCESSOR]     - Creating 1h lag features...
+[PREPROCESSOR]     - Creating 24h lag features...
+[PREPROCESSOR]     - Creating 168h lag features...
+[PREPROCESSOR] ✓ Generated 6 lagged features
+[PREPROCESSOR]   - Features: ['close_lag_1h', 'close_lag_24h', 'close_lag_168h', 'volume_lag_1h', 'volume_lag_24h', 'volume_lag_168h']
+[PREPROCESSOR]   - Output shape: (50000, 37)
+[PREPROCESSOR]   - NaN values: 386 (expected due to lag)
+
+[PREPROCESSOR] Generating rolling features...
+[PREPROCESSOR]   - Input shape: (50000, 37)
+[PREPROCESSOR]   - Window size: 24h
+[PREPROCESSOR]   - Processing ETHUSDT...
+[PREPROCESSOR]     - Calculating rolling mean/std...
+[PREPROCESSOR]     - Calculating rolling max/min...
+[PREPROCESSOR] ✓ Generated 4 rolling features
+[PREPROCESSOR]   - Features: ['rolling_mean_close_24h', 'rolling_std_close_24h', 'rolling_max_high_24h', 'rolling_min_low_24h']
+[PREPROCESSOR]   - Output shape: (50000, 41)
+[PREPROCESSOR]   - NaN values: 92 (expected in first 24 rows)
+
+[PREPROCESSOR] Removing NaN rows...
+[PREPROCESSOR]   - Shape before: (50000, 41)
+[PREPROCESSOR]   - Total NaN values: 479
+[PREPROCESSOR]   - Shape after: (49832, 41)
+[PREPROCESSOR] ✓ Removed rows with NaN values
+
+[PREPROCESSOR] Splitting data into train/val/test...
+[PREPROCESSOR]   - Input shape: (49832, 41)
+[PREPROCESSOR]   - Split ratios: train=0.7, val=0.15, test=0.15
+[PREPROCESSOR]   - Splitting ETHUSDT...
+[PREPROCESSOR]     - Train: 34882 samples (2020-05-04 11:30:00 to 2024-04-27 19:30:00)
+[PREPROCESSOR]     - Val:   7474 samples (2024-04-27 20:30:00 to 2025-03-05 05:30:00)
+[PREPROCESSOR]     - Test:  7476 samples (2025-03-05 06:30:00 to 2026-01-10 17:30:00)
+
+[PREPROCESSOR] ✓ Split complete
+[PREPROCESSOR]   - Train: (34882, 41)
+[PREPROCESSOR]   - Val:   (7474, 41)
+[PREPROCESSOR]   - Test:  (7476, 41)
+
+[PREPROCESSOR] Normalizing splits...
+
+[PREPROCESSOR] Normalizing features...
+[PREPROCESSOR]   - Input shape: (34882, 41)
+[PREPROCESSOR]   - Fit scalers: True
+[PREPROCESSOR]   - Auto-detected 33 features to scale
+[PREPROCESSOR]   - Features to normalize: 33
+[PREPROCESSOR]   - Normalizing ETHUSDT...
+[PREPROCESSOR]     - Fitting scaler for ETHUSDT...
+[PREPROCESSOR]     - Scaler fitted on 34882 valid samples
+[PREPROCESSOR]     - Mean: [1.94837757e+03 1.95943730e+03 1.93636947e+03 1.94829382e+03
+ 4.95724310e+07]... (showing first 5)
+[PREPROCESSOR]     - Std: [1.06417763e+03 1.07059993e+03 1.05722490e+03 1.06419903e+03
+ 5.69800253e+07]... (showing first 5)
+[PREPROCESSOR] ✓ Normalization complete
+[PREPROCESSOR]   - Output shape: (34882, 41)
+[PREPROCESSOR]   - close: mean=-0.0000, std=1.0000
+[PREPROCESSOR]   - high: mean=-0.0000, std=1.0000
+[PREPROCESSOR]   - low: mean=0.0000, std=1.0000
+
+[PREPROCESSOR] Normalizing features...
+[PREPROCESSOR]   - Input shape: (7474, 41)
+[PREPROCESSOR]   - Fit scalers: False
+[PREPROCESSOR]   - Auto-detected 33 features to scale
+[PREPROCESSOR]   - Features to normalize: 33
+[PREPROCESSOR]   - Normalizing ETHUSDT...
+[PREPROCESSOR]     - Using existing scaler for ETHUSDT
+[PREPROCESSOR] ✓ Normalization complete
+[PREPROCESSOR]   - Output shape: (7474, 41)
+[PREPROCESSOR]   - close: mean=1.0349, std=0.4491
+[PREPROCESSOR]   - high: mean=1.0318, std=0.4475
+[PREPROCESSOR]   - low: mean=1.0386, std=0.4507
+
+[PREPROCESSOR] Normalizing features...
+[PREPROCESSOR]   - Input shape: (7476, 41)
+[PREPROCESSOR]   - Fit scalers: False
+[PREPROCESSOR]   - Auto-detected 33 features to scale
+[PREPROCESSOR]   - Features to normalize: 33
+[PREPROCESSOR]   - Normalizing ETHUSDT...
+[PREPROCESSOR]     - Using existing scaler for ETHUSDT
+[PREPROCESSOR] ✓ Normalization complete
+[PREPROCESSOR]   - Output shape: (7476, 41)
+[PREPROCESSOR]   - close: mean=1.0706, std=0.8651
+[PREPROCESSOR]   - high: mean=1.0678, std=0.8632
+[PREPROCESSOR]   - low: mean=1.0739, std=0.8671
+
+============================================================
+PREPROCESSING PIPELINE COMPLETE
+============================================================
+Train: (34882, 41)
+Val:   (7474, 41)
+Test:  (7476, 41)
+Total features: 33
+============================================================
+
+
+[PREPROCESSOR] Adding time index...
+[PREPROCESSOR]   - Input shape: (34882, 41)
+[PREPROCESSOR]   - ETHUSDT: time_idx from 0 to 34881
+[PREPROCESSOR] ✓ Time index added
+[PREPROCESSOR]   - Time index range: 0 to 34881
+
+[PREPROCESSOR] Adding time index...
+[PREPROCESSOR]   - Input shape: (7474, 41)
+[PREPROCESSOR]   - ETHUSDT: time_idx from 0 to 7473
+[PREPROCESSOR] ✓ Time index added
+[PREPROCESSOR]   - Time index range: 0 to 7473
+
+[PREPROCESSOR] Adding time index...
+[PREPROCESSOR]   - Input shape: (7476, 41)
+[PREPROCESSOR]   - ETHUSDT: time_idx from 0 to 7475
+[PREPROCESSOR] ✓ Time index added
+[PREPROCESSOR]   - Time index range: 0 to 7475
+
+[DATASET] Creating train/val/test DataLoaders...
+[DATASET]   - Train samples: 34882
+[DATASET]   - Val samples: 7474
+[DATASET]   - Test samples: 7476
+
+[DATASET] Creating training dataset...
+[DATASET] ✗ Failed to create TimeSeriesDataSet: 20695 (59.33%) of close values were found to be NA or infinite (even after encoding). NA values are not allowed `allow_missing_timesteps` refers to missing rows, not to missing values. Possible strategies to fix the issue are (a) dropping the variable close, (b) using `NaNLabelEncoder(add_nan=True)` for categorical variables, (c) filling missing values and/or (d) optionally adding a variable indicating filled values
+Error: 20695 (59.33%) of close values were found to be NA or infinite (even after encoding). NA values are not allowed `allow_missing_timesteps` refers to missing rows, not to missing values. Possible strategies to fix the issue are (a) dropping the variable close, (b) using `NaNLabelEncoder(add_nan=True)` for categorical variables, (c) filling missing values and/or (d) optionally adding a variable indicating filled values

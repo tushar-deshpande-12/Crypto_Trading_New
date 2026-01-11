@@ -1,0 +1,7 @@
+{
+  "data_format": true,
+  "loss_function": true,
+  "data_leakage": true,
+  "target_normalization": true,
+  "random_baseline": false
+}

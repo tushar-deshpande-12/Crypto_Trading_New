@@ -1,0 +1,24 @@
+{
+  "symbol": "XRPUSDT",
+  "candle_count": 50000,
+  "interval": "1h",
+  "fetch_timestamp": "2026-01-10T17:44:55.213206",
+  "date_range": {
+    "start": "2020-04-27T11:30:00",
+    "end": "2026-01-10T17:30:00",
+    "start_timestamp": 1587967200000,
+    "end_timestamp": 1768046400000
+  },
+  "data_points": 50000,
+  "files": [
+    "metadata.json",
+    "data.csv",
+    "data.json"
+  ],
+  "user_metadata": {
+    "interval": "1h",
+    "max_candles_requested": 50000,
+    "actual_candles_fetched": 50000,
+    "fetch_method": "max_historical"
+  }
+}

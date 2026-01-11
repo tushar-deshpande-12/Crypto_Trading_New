@@ -1,0 +1,208 @@
+W0111 19:11:09.857000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.858000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.858000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.859000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.859000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.860000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.860000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.861000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.861000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.861000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.861000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.861000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+W0111 19:11:09.862000 19824 torch\utils\flop_counter.py:45] triton not found; flop counting will not work for triton kernels
+C:\Users\dtush\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\lightning\pytorch\utilities\parsing.py:210: Attribute 'loss' is an instance of `nn.Module` and is already saved during checkpointing. It is recommended to ignore them using `self.save_hyperparameters(ignore=['loss'])`.
+C:\Users\dtush\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\lightning\pytorch\utilities\parsing.py:210: Attribute 'logging_metrics' is an instance of `nn.Module` and is already saved during checkpointing. It is recommended to ignore them using `self.save_hyperparameters(ignore=['logging_metrics'])`.
+GPU available: True (cuda), used: False
+TPU available: False, using: 0 TPU cores
+C:\Users\dtush\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\lightning\pytorch\trainer\setup.py:175: GPU available but not used. You can set it by doing `Trainer(accelerator='gpu')`.
+`Trainer(limit_train_batches=1.0)` was configured so 100% of the batches per epoch will be used..
+`Trainer(limit_val_batches=1.0)` was configured so 100% of the batches will be used..
+Traceback (most recent call last):
+  File "C:\crypto\ver6\run_check.py", line 49, in <module>
+    'data_format': bool(validate_data_format(train_loader, verbose=False)),
+                        ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\crypto\ver6\src\ml\training\dataset.py", line 394, in validate_data_format
+    x = batch['encoder_cont']
+        ~~~~~^^^^^^^^^^^^^^^^
+TypeError: tuple indices must be integers or slices, not str
+[TRAINER] Lightning version: 2.6.0
+
+[PREPROCESSOR] Initializing CryptoPreprocessor
+[PREPROCESSOR]   - Dataset directory: dataset
+[PREPROCESSOR] ✓ Preprocessor initialized
+
+============================================================
+STARTING COMPLETE PREPROCESSING PIPELINE
+============================================================
+
+[PREPROCESSOR] Loading data for 1 symbols: ['ETHUSDT']
+[PREPROCESSOR] [1/1] Loading ETHUSDT...
+[PREPROCESSOR]   - Using dataset: 2026-01-10_17-43-53_50000candles
+[PREPROCESSOR]   - Loaded 50000 rows
+[PREPROCESSOR]   - Columns: ['close', 'close_time', 'datetime', 'high', 'low', 'open', 'quote_volume', 'symbol', 'taker_buy_quote_volume', 'taker_buy_volume', 'timestamp', 'trades', 'volume']
+[PREPROCESSOR] ✓ ETHUSDT loaded successfully
+
+[PREPROCESSOR] Combining 1 datasets...
+[PREPROCESSOR] ✓ Combined dataset shape: (50000, 13)
+[PREPROCESSOR]   - Total rows: 50000
+[PREPROCESSOR]   - Symbols: ['ETHUSDT']
+[PREPROCESSOR]   - Date range: 2020-04-27 11:30:00 to 2026-01-10 17:30:00
+
+[PREPROCESSOR] Generating temporal features...
+[PREPROCESSOR]   - Input shape: (50000, 13)
+[PREPROCESSOR]   - Extracting hour, day, month...
+[PREPROCESSOR]   - Applying cyclical encoding...
+[PREPROCESSOR] ✓ Generated 8 temporal features
+[PREPROCESSOR]   - Features: ['hour_sin', 'hour_cos', 'day_of_week_sin', 'day_of_week_cos', 'day_of_month_sin', 'day_of_month_cos', 'month_sin', 'month_cos']
+[PREPROCESSOR]   - Output shape: (50000, 25)
+
+[PREPROCESSOR] Generating technical indicators...
+[PREPROCESSOR]   - Input shape: (50000, 25)
+[PREPROCESSOR]   - Processing ETHUSDT...
+[PREPROCESSOR] ✓ Generated 6 technical indicators
+[PREPROCESSOR]   - Features: ['returns', 'log_volume', 'log_quote_volume', 'price_range', 'trade_intensity', 'taker_buy_ratio']
+[PREPROCESSOR]   - Output shape: (50000, 31)
+[PREPROCESSOR]   - NaN values: 1
+
+[PREPROCESSOR] Generating lagged features...
+[PREPROCESSOR]   - Input shape: (50000, 31)
+[PREPROCESSOR]   - Lag periods: [1, 24, 168]
+[PREPROCESSOR]   - Processing ETHUSDT...
+[PREPROCESSOR]     - Creating 1h lag features...
+[PREPROCESSOR]     - Creating 24h lag features...
+[PREPROCESSOR]     - Creating 168h lag features...
+[PREPROCESSOR] ✓ Generated 6 lagged features
+[PREPROCESSOR]   - Features: ['close_lag_1h', 'close_lag_24h', 'close_lag_168h', 'volume_lag_1h', 'volume_lag_24h', 'volume_lag_168h']
+[PREPROCESSOR]   - Output shape: (50000, 37)
+[PREPROCESSOR]   - NaN values: 386 (expected due to lag)
+
+[PREPROCESSOR] Generating rolling features...
+[PREPROCESSOR]   - Input shape: (50000, 37)
+[PREPROCESSOR]   - Window size: 24h
+[PREPROCESSOR]   - Processing ETHUSDT...
+[PREPROCESSOR]     - Calculating rolling mean/std...
+[PREPROCESSOR]     - Calculating rolling max/min...
+[PREPROCESSOR] ✓ Generated 4 rolling features
+[PREPROCESSOR]   - Features: ['rolling_mean_close_24h', 'rolling_std_close_24h', 'rolling_max_high_24h', 'rolling_min_low_24h']
+[PREPROCESSOR]   - Output shape: (50000, 41)
+[PREPROCESSOR]   - NaN values: 92 (expected in first 24 rows)
+
+[PREPROCESSOR] Removing NaN rows...
+[PREPROCESSOR]   - Shape before: (50000, 41)
+[PREPROCESSOR]   - Total NaN values: 479
+[PREPROCESSOR]   - Shape after: (49832, 41)
+[PREPROCESSOR] ✓ Removed rows with NaN values
+
+[PREPROCESSOR] Splitting data into train/val/test...
+[PREPROCESSOR]   - Input shape: (49832, 41)
+[PREPROCESSOR]   - Split ratios: train=0.7, val=0.15, test=0.15
+[PREPROCESSOR]   - Splitting ETHUSDT...
+[PREPROCESSOR]     - Train: 34882 samples (2020-05-04 11:30:00 to 2024-04-27 19:30:00)
+[PREPROCESSOR]     - Val:   7474 samples (2024-04-27 20:30:00 to 2025-03-05 05:30:00)
+[PREPROCESSOR]     - Test:  7476 samples (2025-03-05 06:30:00 to 2026-01-10 17:30:00)
+
+[PREPROCESSOR] ✓ Split complete
+[PREPROCESSOR]   - Train: (34882, 41)
+[PREPROCESSOR]   - Val:   (7474, 41)
+[PREPROCESSOR]   - Test:  (7476, 41)
+
+[PREPROCESSOR] Normalizing splits...
+
+[PREPROCESSOR] Normalizing features...
+[PREPROCESSOR]   - Input shape: (34882, 41)
+[PREPROCESSOR]   - Fit scalers: True
+[PREPROCESSOR]   - Auto-detected 32 features to scale
+[PREPROCESSOR]   - Excluded 'close' (target) from normalization
+[PREPROCESSOR]   - Features to normalize: 32
+[PREPROCESSOR]   - Normalizing ETHUSDT...
+[PREPROCESSOR]     - Fitting scaler for ETHUSDT...
+[PREPROCESSOR]     - Scaler fitted on 34882 valid samples
+[PREPROCESSOR]     - Mean: [1.95943730e+03 1.93636947e+03 1.94829382e+03 4.95724310e+07
+ 2.46975614e+07]... (showing first 5)
+[PREPROCESSOR]     - Std: [1.07059993e+03 1.05722490e+03 1.06419903e+03 5.69800253e+07
+ 2.82905143e+07]... (showing first 5)
+[PREPROCESSOR] ✓ Normalization complete
+[PREPROCESSOR]   - Output shape: (34882, 41)
+[PREPROCESSOR]   - high: mean=-0.0000, std=1.0000
+[PREPROCESSOR]   - low: mean=0.0000, std=1.0000
+[PREPROCESSOR]   - open: mean=0.0000, std=1.0000
+
+[PREPROCESSOR] Normalizing features...
+[PREPROCESSOR]   - Input shape: (7474, 41)
+[PREPROCESSOR]   - Fit scalers: False
+[PREPROCESSOR]   - Auto-detected 32 features to scale
+[PREPROCESSOR]   - Excluded 'close' (target) from normalization
+[PREPROCESSOR]   - Features to normalize: 32
+[PREPROCESSOR]   - Normalizing ETHUSDT...
+[PREPROCESSOR]     - Using existing scaler for ETHUSDT
+[PREPROCESSOR] ✓ Normalization complete
+[PREPROCESSOR]   - Output shape: (7474, 41)
+[PREPROCESSOR]   - high: mean=1.0318, std=0.4475
+[PREPROCESSOR]   - low: mean=1.0386, std=0.4507
+[PREPROCESSOR]   - open: mean=1.0351, std=0.4489
+
+[PREPROCESSOR] Normalizing features...
+[PREPROCESSOR]   - Input shape: (7476, 41)
+[PREPROCESSOR]   - Fit scalers: False
+[PREPROCESSOR]   - Auto-detected 32 features to scale
+[PREPROCESSOR]   - Excluded 'close' (target) from normalization
+[PREPROCESSOR]   - Features to normalize: 32
+[PREPROCESSOR]   - Normalizing ETHUSDT...
+[PREPROCESSOR]     - Using existing scaler for ETHUSDT
+[PREPROCESSOR] ✓ Normalization complete
+[PREPROCESSOR]   - Output shape: (7476, 41)
+[PREPROCESSOR]   - high: mean=1.0678, std=0.8632
+[PREPROCESSOR]   - low: mean=1.0739, std=0.8671
+[PREPROCESSOR]   - open: mean=1.0705, std=0.8651
+
+============================================================
+PREPROCESSING PIPELINE COMPLETE
+============================================================
+Train: (34882, 41)
+Val:   (7474, 41)
+Test:  (7476, 41)
+Total features: 32
+============================================================
+
+
+[PREPROCESSOR] Adding time index...
+[PREPROCESSOR]   - Input shape: (34882, 41)
+[PREPROCESSOR]   - ETHUSDT: time_idx from 0 to 34881
+[PREPROCESSOR] ✓ Time index added
+[PREPROCESSOR]   - Time index range: 0 to 34881
+
+[PREPROCESSOR] Adding time index...
+[PREPROCESSOR]   - Input shape: (7474, 41)
+[PREPROCESSOR]   - ETHUSDT: time_idx from 0 to 7473
+[PREPROCESSOR] ✓ Time index added
+[PREPROCESSOR]   - Time index range: 0 to 7473
+
+[PREPROCESSOR] Adding time index...
+[PREPROCESSOR]   - Input shape: (7476, 41)
+[PREPROCESSOR]   - ETHUSDT: time_idx from 0 to 7475
+[PREPROCESSOR] ✓ Time index added
+[PREPROCESSOR]   - Time index range: 0 to 7475
+
+[DATASET] Creating train/val/test DataLoaders...
+[DATASET]   - Train samples: 34882
+[DATASET]   - Val samples: 7474
+[DATASET]   - Test samples: 7476
+
+[DATASET] Creating training dataset...
+
+[DATASET] Creating validation dataset...
+
+[DATASET] Creating test dataset...
+
+[DATASET] Creating DataLoaders...
+
+[DATASET] ✓ All DataLoaders created successfully
+[DATASET]   - Train batches: 542
+[DATASET]   - Val batches: 1
+[DATASET]   - Test batches: 1
+
+[METRICS_TRACKER] Initializing MetricsTracker
+[METRICS_TRACKER]   - Tracking metrics: ['loss', 'mae', 'rmse', 'mape', 'r2', 'direction_accuracy']
+[METRICS_TRACKER] ✓ MetricsTracker initialized
+Error: tuple indices must be integers or slices, not str
