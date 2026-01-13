@@ -364,7 +364,7 @@ class CryptoAIPredictorApp:
 
         # Check if ML modules are available
         if not ML_AVAILABLE:
-            self.ml_panel.log_message(f"[APP] ✗ PyTorch not installed!")
+            self.ml_panel.log_message(f"[APP] [X] PyTorch not installed!")
             self.ml_panel.log_message(f"[APP] Error: {ML_IMPORT_ERROR}")
             self.ml_panel.log_message(f"[APP] Install with: pip install torch pytorch-lightning==1.9.5 pytorch-forecasting")
             messagebox.showerror(
@@ -384,7 +384,7 @@ class CryptoAIPredictorApp:
             pl_major = int(pl_version.split('.')[0])
 
             if pl_major >= 2:
-                self.ml_panel.log_message(f"[APP] ⚠ PyTorch Lightning version incompatibility detected!")
+                self.ml_panel.log_message(f"[APP] [!] PyTorch Lightning version incompatibility detected!")
                 self.ml_panel.log_message(f"[APP] Current version: {pl_version}")
                 self.ml_panel.log_message(f"[APP] Required: < 2.0.0")
                 self.ml_panel.log_message(f"[APP] ")
@@ -406,7 +406,7 @@ class CryptoAIPredictorApp:
                     self.ml_panel.training_complete(False, "Version incompatibility - please downgrade pytorch-lightning")
                     return
                 else:
-                    self.ml_panel.log_message(f"[APP] ⚠ Proceeding despite version warning...")
+                    self.ml_panel.log_message(f"[APP] [!] Proceeding despite version warning...")
         except:
             pass  # Version check failed, proceed anyway
 
@@ -430,31 +430,22 @@ class CryptoAIPredictorApp:
                 # Initialize preprocessor
                 preprocessor = CryptoPreprocessor(dataset_dir=AppConfig.DATASET_DIR)
 
-                # Load data
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] Loading data for {len(symbols)} symbols..."))
-                combined_df = preprocessor.load_multi_symbol_data(symbols)
+                # Use process_all - it does EVERYTHING (load, features, split, normalize, save scaler)
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] Running complete preprocessing pipeline..."))
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] Processing {len(symbols)} symbols..."))
 
-                # Generate features
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Generating features..."))
-                combined_df = preprocessor.generate_temporal_features(combined_df)
-                combined_df = preprocessor.generate_technical_indicators(combined_df)
-                combined_df = preprocessor.generate_lagged_features(combined_df)
-
-                # Handle missing values
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Handling missing values..."))
-                combined_df = preprocessor.handle_missing_values(combined_df)
-
-                # Add time index (required by pytorch-forecasting)
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Adding time index..."))
-                combined_df = preprocessor.add_time_index(combined_df)
-
-                # Split data
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Splitting data..."))
-                train_df, val_df, test_df = preprocessor.split_data(
-                    combined_df,
-                    train_ratio=config.get('train_split', 0.7),
-                    val_ratio=config.get('val_split', 0.15)
+                train_df, val_df, test_df = preprocessor.process_all(
+                    symbols=symbols,
+                    save_scaler_path="models/scalers.pkl"  # Automatically saves scaler
                 )
+
+                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] OK Preprocessing complete (features, normalization, scaler saved)"))
+
+                # Add time index for TFT
+                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Adding time index..."))
+                train_df = preprocessor.add_time_index(train_df)
+                val_df = preprocessor.add_time_index(val_df)
+                test_df = preprocessor.add_time_index(test_df)
 
                 # Create TFT config
                 self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Creating model configuration..."))
@@ -512,17 +503,44 @@ class CryptoAIPredictorApp:
                 self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Exporting metrics..."))
                 trainer.export_metrics("models/checkpoints")
 
+                # COMPREHENSIVE MODEL EVALUATION
+                self.root.after(0, lambda: self.ml_panel.log_message("[EVALUATION] Running comprehensive model evaluation..."))
+                try:
+                    from src.ml.training.model_evaluator import evaluate_trained_model
+
+                    # Evaluate on all splits
+                    eval_metrics = evaluate_trained_model(
+                        model=trainer.model_wrapper.model,
+                        train_loader=train_loader,
+                        val_loader=val_loader,
+                        test_loader=test_loader,
+                        save_dir="models/checkpoints/evaluation",
+                        device='cuda' if use_gpu and gpu_count > 0 else 'cpu'
+                    )
+
+                    self.root.after(0, lambda: self.ml_panel.log_message("[EVALUATION] OK Evaluation complete!"))
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Train MAE: {eval_metrics['train']['mae']:.4f}"))
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Val MAE: {eval_metrics['val']['mae']:.4f}"))
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Test MAE: {eval_metrics['test']['mae']:.4f}"))
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Plots saved to: models/checkpoints/evaluation/"))
+
+                except Exception as e:
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION] Warning: {e}"))
+                    print(f"[APP] Evaluation error: {e}")
+
                 # Complete
+                best_model_path = "models/checkpoints/best_model.ckpt"
                 self.root.after(0, lambda: self.ml_panel.training_complete(
                     True,
-                    f"Training completed successfully! Model saved to models/checkpoints/best_model.ckpt"
+                    f"Training completed successfully! Model saved to {best_model_path}"
                 ))
+                self.root.after(0, lambda: self.ml_panel.set_model_path(best_model_path))
                 self.root.after(0, lambda: self._update_status("Training completed successfully"))
 
             except Exception as e:
                 logger.error(f"Training error: {e}", exc_info=True)
                 error_msg = f"Training failed: {str(e)}"
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] ✗ {error_msg}"))
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] [X] {error_msg}"))
                 self.root.after(0, lambda: self.ml_panel.training_complete(False, error_msg))
                 self.root.after(0, lambda: self._update_status("Training failed"))
 
@@ -536,19 +554,167 @@ class CryptoAIPredictorApp:
         print(f"[APP]   - Model: {model_path}")
         print(f"[APP]   - Symbol: {symbol}")
 
-        self.ml_panel.log_message(f"[APP] Prediction requested for {symbol}")
-        self.ml_panel.log_message(f"[APP] Using model: {model_path}")
+        self.ml_panel.log_message(f"[PREDICTION] Generating 10-hour prediction for {symbol}...")
+        self.ml_panel.log_message(f"[PREDICTION] Using model: {model_path}")
 
-        # Note: Actual prediction would be implemented here
-        # For now, this is a placeholder that demonstrates the callback
-        messagebox.showinfo(
-            "Prediction Requested",
-            f"Generating 10-hour prediction for {symbol}\n\n"
-            f"Model: {model_path}\n\n"
-            f"Note: Full prediction implementation requires trained model and PyTorch"
-        )
+        if not ML_AVAILABLE:
+            messagebox.showerror("Error", "ML libraries not available. Please install PyTorch and dependencies.")
+            return
 
-        self.ml_panel.log_message(f"[APP] ⚠ Prediction implementation requires trained model and PyTorch")
+        # Run prediction in background thread
+        def prediction_thread():
+            try:
+                from src.api.binance_client import BinanceAPIClient
+                from src.ml.preprocessing.preprocessor import CryptoPreprocessor
+                from src.ml.training.dataset import create_dataloaders
+                from src.ml.models.tft_model import CryptoTFT
+                from src.ml.models.model_config import TFTConfig
+                import torch
+                import pandas as pd
+                import numpy as np
+
+                # STEP 1: Fetch LIVE data from Binance
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Fetching live market data from Binance..."))
+
+                binance_client = BinanceAPIClient()
+                # Fetch enough data for context + lags
+                # Model needs: max_encoder_length (168h) + max_prediction_length (10h) + max_lag (168h) = 346h
+                # Fetch 500 to be safe
+                live_klines = binance_client.get_klines_formatted(symbol=symbol, interval="1h", limit=500)
+
+                if not live_klines:
+                    raise ValueError(f"Failed to fetch live data for {symbol}")
+
+                # Convert to DataFrame and match CSV column format EXACTLY
+                live_df = pd.DataFrame(live_klines)
+
+                # CRITICAL: Ensure datetime column is proper datetime type
+                if 'timestamp' in live_df.columns:
+                    # Binance API returns 'timestamp' as datetime object
+                    live_df['datetime'] = pd.to_datetime(live_df['timestamp'])
+                    # Keep numeric timestamp for features (milliseconds since epoch)
+                    live_df['timestamp'] = (live_df['datetime'].astype('int64') // 10**6)  # Convert nanoseconds to milliseconds
+
+                # Add symbol column
+                live_df['symbol'] = symbol
+
+                # Ensure all required columns exist (some might be renamed by Binance API)
+                # The Binance API already provides all these columns correctly
+
+                # Verify we have all essential OHLCV columns
+                required_cols = ['datetime', 'open', 'high', 'low', 'close', 'volume', 'symbol']
+                missing = [col for col in required_cols if col not in live_df.columns]
+                if missing:
+                    raise ValueError(f"Missing required columns in live data: {missing}")
+
+                # Capture current price BEFORE preprocessing (actual market price)
+                current_price = float(live_df['close'].iloc[-1])
+                current_timestamp = live_df['datetime'].iloc[-1] if 'datetime' in live_df.columns else 'N/A'
+
+                self.root.after(0, lambda p=current_price: self.ml_panel.log_message(
+                    f"[PREDICTION] OK Fetched {len(live_df)} candles. Current price: ${p:.2f}"
+                ))
+                self.root.after(0, lambda t=current_timestamp: self.ml_panel.log_message(
+                    f"[PREDICTION] Latest data timestamp: {t}"
+                ))
+                self.root.after(0, lambda: self.ml_panel.log_message(
+                    f"[PREDICTION] OK Columns matched to training format ({len(live_df.columns)} columns)"
+                ))
+
+                # STEP 2: Load preprocessor with EXISTING scaler (from training)
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Loading scaler from training..."))
+
+                preprocessor = CryptoPreprocessor(dataset_dir="dataset")
+
+                # Try to load scaler from file
+                scaler_path = "models/scalers.pkl"
+                try:
+                    preprocessor.load_scaler(scaler_path)
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] OK Loaded scaler from {scaler_path}"))
+                except:
+                    # Fallback: process training data to get scaler (only if scaler file doesn't exist)
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Scaler file not found, generating from training data..."))
+                    train_df, _, _ = preprocessor.process_all(symbols=[symbol])
+
+                # STEP 3: Preprocess live data using TRAINING scaler (no refit!)
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Preprocessing live data..."))
+
+                # Generate features (must match training pipeline!)
+                live_df = preprocessor.generate_temporal_features(live_df)
+                live_df = preprocessor.generate_technical_indicators(live_df)
+                live_df = preprocessor.generate_lagged_features(live_df)
+                live_df = preprocessor.generate_rolling_features(live_df)
+                live_df = preprocessor.generate_volatility_features(live_df)
+
+                # Remove NaN rows (from lag, rolling, and volatility features)
+                live_df = live_df.dropna().reset_index(drop=True)
+
+                # Normalize using EXISTING scaler (fit=False is critical!)
+                live_df = preprocessor.normalize(live_df, fit=False)
+
+                # Add time index for TFT
+                live_df = preprocessor.add_time_index(live_df)
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Creating prediction dataset..."))
+
+                # STEP 4: Create dataset from live data
+                config = TFTConfig()
+
+                # Create prediction dataset using CryptoTimeSeriesDataset
+                from src.ml.training.dataset import CryptoTimeSeriesDataset
+
+                prediction_dataset = CryptoTimeSeriesDataset(
+                    data=live_df,
+                    context_length=config.max_encoder_length,
+                    prediction_length=config.max_prediction_length,
+                    target_column='close',
+                    verbose=False
+                )
+
+                # Create DataLoader
+                live_loader = prediction_dataset.get_dataloader(
+                    batch_size=1,
+                    shuffle=False,
+                    num_workers=0
+                )
+
+                self.root.after(0, lambda: self.ml_panel.log_message(
+                    f"[PREDICTION] OK Dataset created with {len(prediction_dataset.dataset)} samples"
+                ))
+
+                # STEP 5: Load model and predict
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Loading trained model..."))
+                crypto_tft = CryptoTFT.load_model(model_path, verbose=False)
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Generating predictions from current market data..."))
+                predictions = crypto_tft.predict_next_n_hours(live_loader, n_hours=10)
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] OK Predictions generated!"))
+
+                # STEP 6: Denormalize and display
+                scaler = preprocessor.scalers.get(symbol)
+                feature_columns = preprocessor.feature_columns
+
+                # Display results in GUI (thread-safe) - use lambda defaults to capture values
+                self.root.after(0, lambda p=predictions, s=symbol, sc=scaler, fc=feature_columns, cp=current_price:
+                               self.ml_panel.display_prediction(p, s, sc, fc, cp))
+                self.root.after(0, lambda sym=symbol: self.ml_panel.log_message(f"[PREDICTION] OK Prediction complete for {sym}"))
+
+            except FileNotFoundError:
+                error_msg = f"Model not found: {model_path}"
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] X {error_msg}"))
+                self.root.after(0, lambda: messagebox.showerror("Model Not Found", error_msg))
+            except Exception as e:
+                error_msg = f"Prediction failed: {str(e)}"
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] X {error_msg}"))
+                self.root.after(0, lambda: messagebox.showerror("Prediction Failed", error_msg))
+                print(f"[APP] Prediction error: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Start prediction thread
+        thread = threading.Thread(target=prediction_thread, daemon=True)
+        thread.start()
 
     def run(self):
         """Start the application"""

@@ -13,7 +13,7 @@ try:
     import torch
     TORCH_AVAILABLE = True
 except ImportError:
-    print("[PREDICTOR] ⚠ Warning: PyTorch not installed")
+    print("[PREDICTOR] [!] Warning: PyTorch not installed")
     TORCH_AVAILABLE = False
 
 from ..models.tft_model import CryptoTFT
@@ -70,7 +70,7 @@ class CryptoPredictor:
         self._load_preprocessor()
 
         if self.verbose:
-            print(f"[PREDICTOR] ✓ CryptoPredictor initialized")
+            print(f"[PREDICTOR] [OK] CryptoPredictor initialized")
 
     def _load_model(self):
         """Load trained model"""
@@ -84,10 +84,10 @@ class CryptoPredictor:
             )
 
             if self.verbose:
-                print(f"[PREDICTOR] ✓ Model loaded successfully")
+                print(f"[PREDICTOR] [OK] Model loaded successfully")
 
         except Exception as e:
-            print(f"[PREDICTOR] ✗ Failed to load model: {e}")
+            print(f"[PREDICTOR] [X] Failed to load model: {e}")
             raise
 
     def _load_preprocessor(self):
@@ -104,11 +104,11 @@ class CryptoPredictor:
             self.preprocessor.load_scaler(str(self.scaler_path))
 
             if self.verbose:
-                print(f"[PREDICTOR] ✓ Preprocessor loaded")
+                print(f"[PREDICTOR] [OK] Preprocessor loaded")
                 print(f"[PREDICTOR]   - Loaded scalers for {len(self.preprocessor.scalers)} symbols")
 
         except Exception as e:
-            print(f"[PREDICTOR] ✗ Failed to load preprocessor: {e}")
+            print(f"[PREDICTOR] [X] Failed to load preprocessor: {e}")
             raise
 
     def load_recent_data(
@@ -144,16 +144,16 @@ class CryptoPredictor:
                     print(f"[PREDICTOR]   - Using last {n_candles} candles")
             else:
                 if self.verbose:
-                    print(f"[PREDICTOR] ⚠ Warning: Only {len(df)} candles available (need {n_candles})")
+                    print(f"[PREDICTOR] [!] Warning: Only {len(df)} candles available (need {n_candles})")
 
             if self.verbose:
                 print(f"[PREDICTOR]   - Date range: {df['datetime'].min()} to {df['datetime'].max()}")
-                print(f"[PREDICTOR] ✓ Recent data loaded")
+                print(f"[PREDICTOR] [OK] Recent data loaded")
 
             return df
 
         except Exception as e:
-            print(f"[PREDICTOR] ✗ Failed to load recent data: {e}")
+            print(f"[PREDICTOR] [X] Failed to load recent data: {e}")
             raise
 
     def preprocess(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -192,12 +192,12 @@ class CryptoPredictor:
 
             if self.verbose:
                 print(f"[PREDICTOR]   - Output shape: {df.shape}")
-                print(f"[PREDICTOR] ✓ Preprocessing complete")
+                print(f"[PREDICTOR] [OK] Preprocessing complete")
 
             return df
 
         except Exception as e:
-            print(f"[PREDICTOR] ✗ Preprocessing failed: {e}")
+            print(f"[PREDICTOR] [X] Preprocessing failed: {e}")
             raise
 
     def predict(
@@ -282,7 +282,7 @@ class CryptoPredictor:
             predictions_denorm['timestamps'] = future_timestamps
 
             if self.verbose:
-                print(f"[PREDICTOR] ✓ Prediction complete")
+                print(f"[PREDICTOR] [OK] Prediction complete")
                 print(f"[PREDICTOR]   - Predicted {n_hours} hours")
                 print(f"[PREDICTOR]   - Price range: ${predictions_denorm['median'].min():.2f} - "
                       f"${predictions_denorm['median'].max():.2f}")
@@ -290,7 +290,7 @@ class CryptoPredictor:
             return predictions_denorm
 
         except Exception as e:
-            print(f"[PREDICTOR] ✗ Prediction failed: {e}")
+            print(f"[PREDICTOR] [X] Prediction failed: {e}")
             raise
 
     def _denormalize_predictions(
@@ -338,12 +338,12 @@ class CryptoPredictor:
                         print(f"[PREDICTOR]   - {key}: {denorm_values.min():.2f} to {denorm_values.max():.2f}")
 
             if self.verbose:
-                print(f"[PREDICTOR] ✓ Denormalization complete")
+                print(f"[PREDICTOR] [OK] Denormalization complete")
 
             return denorm_predictions
 
         except Exception as e:
-            print(f"[PREDICTOR] ✗ Denormalization failed: {e}")
+            print(f"[PREDICTOR] [X] Denormalization failed: {e}")
             raise
 
     def predict_multiple(
@@ -375,15 +375,15 @@ class CryptoPredictor:
                 results[symbol] = predictions
 
                 if self.verbose:
-                    print(f"[PREDICTOR] ✓ {symbol} prediction complete")
+                    print(f"[PREDICTOR] [OK] {symbol} prediction complete")
 
             except Exception as e:
-                print(f"[PREDICTOR] ✗ Failed to predict {symbol}: {e}")
+                print(f"[PREDICTOR] [X] Failed to predict {symbol}: {e}")
                 results[symbol] = None
 
         if self.verbose:
             successful = sum(1 for v in results.values() if v is not None)
-            print(f"\n[PREDICTOR] ✓ Batch prediction complete: {successful}/{len(symbols)} successful")
+            print(f"\n[PREDICTOR] [OK] Batch prediction complete: {successful}/{len(symbols)} successful")
 
         return results
 
@@ -417,12 +417,12 @@ class CryptoPredictor:
             df.to_csv(output_path, index=False)
 
             if self.verbose:
-                print(f"[PREDICTOR] ✓ Predictions exported")
+                print(f"[PREDICTOR] [OK] Predictions exported")
                 print(f"[PREDICTOR]   - Rows: {len(df)}")
                 print(f"[PREDICTOR]   - File: {output_path}")
 
         except Exception as e:
-            print(f"[PREDICTOR] ✗ Export failed: {e}")
+            print(f"[PREDICTOR] [X] Export failed: {e}")
             raise
 
 

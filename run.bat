@@ -1,31 +1,18 @@
 @echo off
-REM Crypto AI Predictor Launcher
-REM Unified application with symbol tracking, charts, and data pipeline
+REM Crypto AI Predictor - Main Launcher
+REM Launches the unified GUI application
 
-echo ========================================
-echo  Crypto AI Predictor
-echo  Version 3.0.0
-echo ========================================
+echo ================================================
+echo   Crypto AI Predictor v3.0
+echo   Starting Application...
+echo ================================================
 echo.
 
-REM Check Python
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Python is not installed or not in PATH
-    echo Please install Python 3.8+ from https://www.python.org/
-    pause
-    exit /b 1
-)
+python main.py
 
-echo Starting application...
-echo.
-
-REM Run the application
-python app.py
-
-REM Keep window open if there was an error
-if errorlevel 1 (
+if %ERRORLEVEL% NEQ 0 (
     echo.
-    echo Application exited with error
-    pause
+    echo [ERROR] Application failed to start
+    echo Press any key to exit...
+    pause >nul
 )

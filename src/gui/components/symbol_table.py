@@ -84,7 +84,7 @@ class SymbolTable:
         # Refresh button
         refresh_btn = tk.Button(
             control_frame,
-            text="↻ Refresh",
+            text="[R] Refresh",
             command=self._on_refresh_click,
             bg=get_color('primary'),
             fg="white",

@@ -22,7 +22,7 @@ try:
 
     TORCH_AVAILABLE = True
 except ImportError:
-    print("[DATASET] ⚠ Warning: PyTorch not installed. Install with: pip install torch pytorch-lightning pytorch-forecasting")
+    print("[DATASET] [!] Warning: PyTorch not installed. Install with: pip install torch pytorch-lightning pytorch-forecasting")
     TORCH_AVAILABLE = False
 
 
@@ -100,7 +100,7 @@ class CryptoTimeSeriesDataset:
         self.dataset = self._create_time_series_dataset()
 
         if verbose:
-            print(f"[DATASET] ✓ Dataset initialized")
+            print(f"[DATASET] [OK] Dataset initialized")
             print(f"[DATASET]   - Total sequences: {len(self.dataset)}")
 
     def _prepare_data(self):
@@ -142,7 +142,7 @@ class CryptoTimeSeriesDataset:
             raise ValueError(f"Missing required columns: {missing_cols}")
 
         if self.verbose:
-            print(f"[DATASET] ✓ Data prepared")
+            print(f"[DATASET] [OK] Data prepared")
             print(f"[DATASET]   - Columns: {list(self.data.columns)}")
             print(f"[DATASET]   - Time index range: {self.data['time_idx'].min()} to {self.data['time_idx'].max()}")
 
@@ -224,12 +224,12 @@ class CryptoTimeSeriesDataset:
             )
 
             if self.verbose:
-                print(f"[DATASET] ✓ TimeSeriesDataSet created successfully")
+                print(f"[DATASET] [OK] TimeSeriesDataSet created successfully")
 
             return dataset
 
         except Exception as e:
-            print(f"[DATASET] ✗ Failed to create TimeSeriesDataSet: {e}")
+            print(f"[DATASET] [X] Failed to create TimeSeriesDataSet: {e}")
             raise
 
     def get_dataloader(
@@ -266,13 +266,13 @@ class CryptoTimeSeriesDataset:
             )
 
             if self.verbose:
-                print(f"[DATASET] ✓ DataLoader created")
+                print(f"[DATASET] [OK] DataLoader created")
                 print(f"[DATASET]   - Total batches: {len(dataloader)}")
 
             return dataloader
 
         except Exception as e:
-            print(f"[DATASET] ✗ Failed to create DataLoader: {e}")
+            print(f"[DATASET] [X] Failed to create DataLoader: {e}")
             raise
 
 
@@ -364,7 +364,7 @@ def create_dataloaders(
     )
     print(f"[DATASET]   OK Test loader: train=False (no shuffle, no augmentation)")
 
-    print(f"\n[DATASET] ✓ All DataLoaders created successfully")
+    print(f"\n[DATASET] [OK] All DataLoaders created successfully")
     print(f"[DATASET]   - Train batches: {len(train_loader)}")
     print(f"[DATASET]   - Val batches: {len(val_loader)}")
     print(f"[DATASET]   - Test batches: {len(test_loader)}")
@@ -523,18 +523,18 @@ def validate_target_normalization(dataloader, verbose: bool = True) -> bool:
 
     # Warning for very large values (might not be normalized)
     if abs(target_mean) > 10000:
-        issues.append(f"⚠️  Target mean very large ({target_mean:.2f})")
+        issues.append(f"[!]️  Target mean very large ({target_mean:.2f})")
         if verbose:
-            print(f"\n  ⚠️  WARNING: Target mean is very large, check normalization")
+            print(f"\n  [!]️  WARNING: Target mean is very large, check normalization")
 
     if target_std > 10000 or target_std < 0.001:
-        issues.append(f"⚠️  Unusual target std ({target_std:.4f})")
+        issues.append(f"[!]️  Unusual target std ({target_std:.4f})")
         if verbose:
-            print(f"\n  ⚠️  WARNING: Target std is {target_std:.4f}, verify normalization")
+            print(f"\n  [!]️  WARNING: Target std is {target_std:.4f}, verify normalization")
 
     if issues:
         if verbose:
-            print(f"\n⚠️  STEP 4 WARNING: Found {len(issues)} potential issues")
+            print(f"\n[!]️  STEP 4 WARNING: Found {len(issues)} potential issues")
         # Return True if only warnings, False if critical
         return not any("❌" in issue for issue in issues)
     else:
@@ -592,9 +592,9 @@ if __name__ == "__main__":
                 if i >= 2:  # Only test first 3 batches
                     break
 
-            print(f"\n[TEST] ✓ Dataset test passed!")
+            print(f"\n[TEST] [OK] Dataset test passed!")
 
         except Exception as e:
-            print(f"\n[TEST] ✗ Test failed: {e}")
+            print(f"\n[TEST] [X] Test failed: {e}")
             import traceback
             traceback.print_exc()

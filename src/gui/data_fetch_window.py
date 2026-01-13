@@ -396,7 +396,7 @@ class DataFetchWindow:
 
                 if dataset_path and self.is_fetching:
                     self.window.after(0, lambda: self._log("=" * 60))
-                    self.window.after(0, lambda: self._log(f"✓ SUCCESS! Data saved to:"))
+                    self.window.after(0, lambda: self._log(f"[OK] SUCCESS! Data saved to:"))
                     self.window.after(0, lambda: self._log(f"  {dataset_path}"))
                     self.window.after(0, lambda: self._log("=" * 60))
                     self.window.after(0, lambda: messagebox.showinfo(
@@ -406,11 +406,11 @@ class DataFetchWindow:
                     ))
                     self.window.after(0, self._update_storage_stats)
                 else:
-                    self.window.after(0, lambda: self._log("✗ Fetch failed or was cancelled"))
+                    self.window.after(0, lambda: self._log("[X] Fetch failed or was cancelled"))
 
             except Exception as e:
                 logger.error(f"Fetch error: {e}", exc_info=True)
-                self.window.after(0, lambda: self._log(f"✗ ERROR: {str(e)}"))
+                self.window.after(0, lambda: self._log(f"[X] ERROR: {str(e)}"))
                 self.window.after(0, lambda: messagebox.showerror(
                     "Fetch Error",
                     f"Failed to fetch data:\n{str(e)}"

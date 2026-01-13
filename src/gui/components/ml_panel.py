@@ -70,7 +70,7 @@ class MLPanel:
         # Scan for available datasets
         self._scan_datasets()
 
-        print(f"[ML_PANEL] ✓ ML Panel initialized")
+        print(f"[ML_PANEL] [OK] ML Panel initialized")
 
     def _create_ui(self):
         """Create all UI sections"""
@@ -107,7 +107,7 @@ class MLPanel:
         # Section 4: Prediction
         self._create_prediction_section(scrollable_frame)
 
-        print(f"[ML_PANEL] ✓ UI sections created")
+        print(f"[ML_PANEL] [OK] UI sections created")
 
     def _create_header(self, parent):
         """Create panel header"""
@@ -295,7 +295,7 @@ class MLPanel:
                 # Refresh button
                 refresh_gpu_btn = tk.Button(
                     gpu_status_frame,
-                    text="↻",
+                    text="[R]",
                     command=self._refresh_gpu_status,
                     bg=get_color('bg_light'),
                     fg=get_color('text_primary'),
@@ -658,7 +658,28 @@ class MLPanel:
             fg=get_color('text_secondary'),
             font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL)
         )
-        self.prediction_label.pack(pady=20)
+        self.prediction_label.pack(pady=10)
+
+        # PREDICTION GRAPH
+        graph_frame = tk.Frame(section, bg=get_color('bg_medium'))
+        graph_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        # Create matplotlib figure for prediction visualization
+        self.prediction_fig = Figure(figsize=(10, 4), facecolor=get_color('bg_medium'))
+        self.prediction_ax = self.prediction_fig.add_subplot(111)
+        self.prediction_ax.set_facecolor(get_color('bg_light'))
+        self.prediction_ax.set_title('10-Hour Price Prediction', color=get_color('text_primary'))
+        self.prediction_ax.set_xlabel('Hours Ahead', color=get_color('text_primary'))
+        self.prediction_ax.set_ylabel('Price (Normalized)', color=get_color('text_primary'))
+        self.prediction_ax.tick_params(colors=get_color('text_primary'))
+        self.prediction_ax.grid(True, alpha=0.3)
+
+        # Embed in tkinter
+        self.prediction_canvas = FigureCanvasTkAgg(self.prediction_fig, graph_frame)
+        self.prediction_canvas.draw()
+        self.prediction_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        print(f"[ML_PANEL]   - Prediction graph created")
 
     def _scan_datasets(self):
         """Scan dataset directory for available datasets"""
@@ -668,7 +689,7 @@ class MLPanel:
             dataset_dir = Path(AppConfig.DATASET_DIR)
 
             if not dataset_dir.exists():
-                print(f"[ML_PANEL] ⚠ Dataset directory not found: {dataset_dir}")
+                print(f"[ML_PANEL] [!] Dataset directory not found: {dataset_dir}")
                 return
 
             # Find symbol directories
@@ -699,10 +720,10 @@ class MLPanel:
             self._update_dataset_checkboxes()
             self._update_symbol_combo()
 
-            print(f"[ML_PANEL] ✓ Found {len(self.available_datasets)} datasets")
+            print(f"[ML_PANEL] [OK] Found {len(self.available_datasets)} datasets")
 
         except Exception as e:
-            print(f"[ML_PANEL] ✗ Failed to scan datasets: {e}")
+            print(f"[ML_PANEL] [X] Failed to scan datasets: {e}")
 
     def _update_dataset_checkboxes(self):
         """Update dataset selection checkboxes"""
@@ -884,7 +905,7 @@ class MLPanel:
             config['use_gpu'] = self.use_gpu_var.get() if self.gpu_available else False
             config['gpu_count'] = self.gpu_count_var.get() if config['use_gpu'] else 0
         except ValueError as e:
-            print(f"[ML_PANEL] ✗ Invalid config value: {e}")
+            print(f"[ML_PANEL] [X] Invalid config value: {e}")
             messagebox.showerror("Invalid Configuration", f"Please check configuration values: {e}")
             return {}
 
@@ -968,13 +989,19 @@ class MLPanel:
         self.stop_training_btn.config(state=tk.DISABLED)
 
         if success:
-            self.progress_label.config(text=f"✓ Training Complete: {message}")
-            self.log_message(f"[TRAINING] ✓ {message}")
+            self.progress_label.config(text=f"OK Training Complete: {message}")
+            self.log_message(f"[TRAINING] OK {message}")
             messagebox.showinfo("Training Complete", message)
         else:
-            self.progress_label.config(text=f"✗ Training Failed: {message}")
-            self.log_message(f"[TRAINING] ✗ {message}")
+            self.progress_label.config(text=f"X Training Failed: {message}")
+            self.log_message(f"[TRAINING] X {message}")
             messagebox.showerror("Training Failed", message)
+
+    def set_model_path(self, path: str):
+        """Set the model path for predictions"""
+        print(f"[ML_PANEL] Setting model path: {path}")
+        self.model_path_var.set(path)
+        self.log_message(f"[PREDICTION] Model ready: {path}")
 
     def _refresh_gpu_status(self):
         """Refresh GPU memory status"""
@@ -996,27 +1023,159 @@ class MLPanel:
         except Exception as e:
             print(f"[ML_PANEL] Failed to refresh GPU status: {e}")
 
-    def display_prediction(self, predictions: Dict[str, Any], symbol: str):
-        """Display prediction results"""
+    def display_prediction(self, predictions: Dict[str, Any], symbol: str, scaler=None, feature_columns=None, current_price=None):
+        """Display prediction results with graph"""
         print(f"[ML_PANEL] Displaying prediction for {symbol}...")
 
-        # Update prediction label with summary
-        median = predictions.get('median', [])
+        if current_price:
+            print(f"[ML_PANEL]   - Current market price: ${current_price:.2f}")
 
-        if len(median) > 0:
-            price_change = ((median[-1] - median[0]) / median[0]) * 100
-            trend = "↗ Bullish" if price_change > 0.5 else ("↘ Bearish" if price_change < -0.5 else "→ Neutral")
+        # Extract prediction array
+        pred = predictions.get('prediction', predictions.get('median', []))
+
+        if len(pred) == 0:
+            self.prediction_label.config(text="Prediction failed - no data returned")
+            return
+
+        # Handle batch dimension: (batch, time) -> use first batch
+        if len(pred.shape) > 1:
+            pred = pred[0]  # Shape: (time,)
+
+        print(f"[ML_PANEL]   - Prediction shape: {pred.shape}")
+        print(f"[ML_PANEL]   - Prediction range (normalized): [{pred.min():.4f}, {pred.max():.4f}]")
+
+        # Denormalize if scaler provided
+        if scaler is not None:
+            try:
+                import numpy as np
+
+                # CRITICAL FIX: Scaler was fitted on multiple features (close, open, high, low, volume, etc.)
+                # We need to create a dummy array with all features, then extract just 'close'
+
+                # Get number of features the scaler was trained on
+                n_features = len(scaler.mean_)
+                n_samples = len(pred)
+
+                print(f"[ML_PANEL]   - Scaler expects {n_features} features")
+
+                # Find the index of 'close' in the feature columns
+                close_idx = 0  # Default to first column
+                if feature_columns and 'close' in feature_columns:
+                    close_idx = feature_columns.index('close')
+                    print(f"[ML_PANEL]   - Found 'close' at index {close_idx}")
+                else:
+                    print(f"[ML_PANEL]   - Warning: 'close' column not found in feature_columns, using index 0")
+
+                # Create dummy array filled with mean values (so denormalization works correctly)
+                # Shape: (n_samples, n_features)
+                dummy_array = np.tile(scaler.mean_, (n_samples, 1))
+
+                # Replace the 'close' column with our predictions
+                dummy_array[:, close_idx] = pred
+
+                # Inverse transform the full array
+                denormalized = scaler.inverse_transform(dummy_array)
+
+                # Extract just the 'close' column
+                pred_denorm = denormalized[:, close_idx]
+
+                print(f"[ML_PANEL]   - Denormalized range: [${pred_denorm.min():.2f}, ${pred_denorm.max():.2f}]")
+            except Exception as e:
+                print(f"[ML_PANEL]   - Denormalization failed: {e}, using normalized values")
+                import traceback
+                traceback.print_exc()
+                pred_denorm = pred
+        else:
+            pred_denorm = pred
+            print(f"[ML_PANEL]   - No scaler provided, using normalized values")
+
+        # IMPORTANT: Add current price as hour 0, then 10 predictions as hours 1-10
+        if current_price is not None:
+            import numpy as np
+            # Prepend current price to predictions
+            pred_denorm_with_current = np.concatenate([[current_price], pred_denorm])
+            print(f"[ML_PANEL]   - Added current price (${current_price:.2f}) as hour 0")
+            print(f"[ML_PANEL]   - Full prediction: ${current_price:.2f} (now) -> ${pred_denorm[-1]:.2f} (+10h)")
+        else:
+            pred_denorm_with_current = pred_denorm
+            print(f"[ML_PANEL]   - Warning: No current price provided, using prediction[0] as baseline")
+
+        # Calculate trend (from current price to final prediction)
+        if len(pred_denorm_with_current) > 1:
+            current_val = pred_denorm_with_current[0]
+            future_val = pred_denorm_with_current[-1]
+
+            price_change = ((future_val - current_val) / abs(current_val) * 100) if current_val != 0 else 0
+            price_diff = future_val - current_val
+
+            trend = "Bullish" if price_change > 0.5 else ("Bearish" if price_change < -0.5 else "Neutral")
+            trend_emoji = "Bullish" if price_change > 0.5 else ("Bearish" if price_change < -0.5 else "Neutral")
 
             summary = (
-                f"Prediction for {symbol}:\n"
-                f"Current → 10h: ${median[0]:.2f} → ${median[-1]:.2f} "
-                f"({price_change:+.2f}%) {trend}"
+                f"{trend_emoji} Prediction for {symbol}:\n"
+                f"Now: ${current_val:.2f} -> +10h: ${future_val:.2f} "
+                f"({price_change:+.2f}% / ${price_diff:+,.2f})"
             )
 
             self.prediction_label.config(text=summary, fg=get_color('accent'))
             self.log_message(f"[PREDICTION] {summary}")
+
+            # Update graph with current price + predictions
+            self._update_prediction_chart(pred_denorm_with_current, symbol, current_price)
         else:
-            self.prediction_label.config(text="Prediction failed - no data returned")
+            self.prediction_label.config(text=f"Prediction for {symbol}: ${pred_denorm_with_current[0]:.2f}")
+
+    def _update_prediction_chart(self, predictions, symbol, current_price=None):
+        """Update prediction chart"""
+        try:
+            self.prediction_ax.clear()
+            self.prediction_ax.set_facecolor(get_color('bg_light'))
+            self.prediction_ax.set_title(f'10-Hour Price Prediction: {symbol}', color=get_color('text_primary'), fontsize=12, fontweight='bold')
+            self.prediction_ax.set_xlabel('Hours from Now', color=get_color('text_primary'))
+            self.prediction_ax.set_ylabel('Price (USD)', color=get_color('text_primary'))
+            self.prediction_ax.tick_params(colors=get_color('text_primary'))
+            self.prediction_ax.grid(True, alpha=0.3)
+
+            # Hours array: 0 (now), 1, 2, 3, ..., 10
+            hours = list(range(len(predictions)))
+
+            # Plot prediction line
+            self.prediction_ax.plot(hours, predictions, marker='o', linewidth=2.5, markersize=6,
+                                   color='#4fc3f7', label='Price Forecast')
+
+            # Add start marker (current price - hour 0)
+            self.prediction_ax.scatter([0], [predictions[0]], s=150, c='#4caf50', marker='o',
+                                      label='NOW (Current Price)', zorder=5, edgecolors='white', linewidths=2)
+
+            # Add end marker (10-hour prediction)
+            self.prediction_ax.scatter([len(predictions)-1], [predictions[-1]], s=150, c='#ff9800', marker='s',
+                                      label='+10 Hours', zorder=5, edgecolors='white', linewidths=2)
+
+            # Add value labels with better positioning
+            # Current price label
+            self.prediction_ax.text(0, predictions[0], f'${predictions[0]:,.2f}\n(NOW)',
+                                   ha='center', va='bottom', color='#4caf50', fontweight='bold', fontsize=9)
+
+            # 10-hour prediction label
+            price_change_pct = ((predictions[-1] - predictions[0]) / predictions[0] * 100) if predictions[0] != 0 else 0
+            label_text = f'${predictions[-1]:,.2f}\n({price_change_pct:+.1f}%)'
+            self.prediction_ax.text(len(predictions)-1, predictions[-1], label_text,
+                                   ha='center', va='bottom', color='#ff9800', fontweight='bold', fontsize=9)
+
+            # Add horizontal line at current price for reference
+            self.prediction_ax.axhline(y=predictions[0], color='#4caf50', linestyle='--', alpha=0.3, linewidth=1)
+
+            self.prediction_ax.legend(loc='best', fontsize=9)
+            self.prediction_fig.tight_layout()
+            self.prediction_canvas.draw()
+
+            print(f"[ML_PANEL]   - Prediction chart updated successfully")
+            print(f"[ML_PANEL]   - Chart shows hours 0 (NOW) through 10 (+10h)")
+
+        except Exception as e:
+            print(f"[ML_PANEL]   - Failed to update prediction chart: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 if __name__ == "__main__":

@@ -27,10 +27,10 @@ def mean_absolute_error(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
     try:
         mae = np.mean(np.abs(y_true - y_pred))
-        print(f"[METRICS] ✓ MAE: {mae:.4f}")
+        print(f"[METRICS] [OK] MAE: {mae:.4f}")
         return float(mae)
     except Exception as e:
-        print(f"[METRICS] ✗ MAE calculation failed: {e}")
+        print(f"[METRICS] [X] MAE calculation failed: {e}")
         return float('nan')
 
 
@@ -50,10 +50,10 @@ def root_mean_squared_error(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     try:
         mse = np.mean((y_true - y_pred) ** 2)
         rmse = np.sqrt(mse)
-        print(f"[METRICS] ✓ RMSE: {rmse:.4f}")
+        print(f"[METRICS] [OK] RMSE: {rmse:.4f}")
         return float(rmse)
     except Exception as e:
-        print(f"[METRICS] ✗ RMSE calculation failed: {e}")
+        print(f"[METRICS] [X] RMSE calculation failed: {e}")
         return float('nan')
 
 
@@ -74,10 +74,10 @@ def mean_absolute_percentage_error(y_true: np.ndarray, y_pred: np.ndarray, epsil
     try:
         # Avoid division by zero
         mape = np.mean(np.abs((y_true - y_pred) / (y_true + epsilon))) * 100
-        print(f"[METRICS] ✓ MAPE: {mape:.2f}%")
+        print(f"[METRICS] [OK] MAPE: {mape:.2f}%")
         return float(mape)
     except Exception as e:
-        print(f"[METRICS] ✗ MAPE calculation failed: {e}")
+        print(f"[METRICS] [X] MAPE calculation failed: {e}")
         return float('nan')
 
 
@@ -99,14 +99,14 @@ def r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
         ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
 
         if ss_tot == 0:
-            print(f"[METRICS] ⚠ Warning: Total sum of squares is zero")
+            print(f"[METRICS] [!] Warning: Total sum of squares is zero")
             return 0.0
 
         r2 = 1 - (ss_res / ss_tot)
-        print(f"[METRICS] ✓ R²: {r2:.4f}")
+        print(f"[METRICS] [OK] R²: {r2:.4f}")
         return float(r2)
     except Exception as e:
-        print(f"[METRICS] ✗ R² calculation failed: {e}")
+        print(f"[METRICS] [X] R² calculation failed: {e}")
         return float('nan')
 
 
@@ -134,10 +134,10 @@ def direction_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 
         accuracy = (correct / total) * 100 if total > 0 else 0.0
 
-        print(f"[METRICS] ✓ Direction Accuracy: {accuracy:.2f}% ({correct}/{total} correct)")
+        print(f"[METRICS] [OK] Direction Accuracy: {accuracy:.2f}% ({correct}/{total} correct)")
         return float(accuracy)
     except Exception as e:
-        print(f"[METRICS] ✗ Direction accuracy calculation failed: {e}")
+        print(f"[METRICS] [X] Direction accuracy calculation failed: {e}")
         return float('nan')
 
 
@@ -168,7 +168,7 @@ def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray, verbose: bool 
     }
 
     if verbose:
-        print(f"\n[METRICS] ✓ All metrics calculated:")
+        print(f"\n[METRICS] [OK] All metrics calculated:")
         for key, value in metrics.items():
             print(f"[METRICS]   - {key.upper()}: {value:.4f}")
 
@@ -201,7 +201,7 @@ class MetricsTracker:
         self.best_metrics: Dict[str, Tuple[int, float]] = {}  # {metric: (epoch, value)}
 
         print(f"[METRICS_TRACKER]   - Tracking metrics: {metrics_to_track}")
-        print(f"[METRICS_TRACKER] ✓ MetricsTracker initialized")
+        print(f"[METRICS_TRACKER] [OK] MetricsTracker initialized")
 
     def update(self, epoch: int, metrics: Dict[str, float], split: str = 'train'):
         """
@@ -215,7 +215,7 @@ class MetricsTracker:
         print(f"\n[METRICS_TRACKER] Updating metrics for epoch {epoch} ({split})...")
 
         if split not in self.history:
-            print(f"[METRICS_TRACKER] ⚠ Unknown split: {split}")
+            print(f"[METRICS_TRACKER] [!] Unknown split: {split}")
             return
 
         for metric_name, value in metrics.items():
@@ -236,7 +236,7 @@ class MetricsTracker:
                             if value < self.best_metrics[metric_name][1]:
                                 self.best_metrics[metric_name] = (epoch, value)
 
-        print(f"[METRICS_TRACKER] ✓ Metrics updated")
+        print(f"[METRICS_TRACKER] [OK] Metrics updated")
         print(f"[METRICS_TRACKER]   - Updated metrics: {list(metrics.keys())}")
 
     def get_best(self, metric: str) -> Tuple[int, float]:
@@ -254,7 +254,7 @@ class MetricsTracker:
             print(f"[METRICS_TRACKER] Best {metric}: {value:.4f} (epoch {epoch})")
             return epoch, value
         else:
-            print(f"[METRICS_TRACKER] ⚠ No best value tracked for {metric}")
+            print(f"[METRICS_TRACKER] [!] No best value tracked for {metric}")
             return (-1, float('nan'))
 
     def get_current(self, metric: str, split: str = 'val') -> Optional[float]:
@@ -310,10 +310,10 @@ class MetricsTracker:
             # Save to CSV
             df.to_csv(path, index=False)
 
-            print(f"[METRICS_TRACKER] ✓ Exported {len(df)} rows to CSV")
+            print(f"[METRICS_TRACKER] [OK] Exported {len(df)} rows to CSV")
 
         except Exception as e:
-            print(f"[METRICS_TRACKER] ✗ Export failed: {e}")
+            print(f"[METRICS_TRACKER] [X] Export failed: {e}")
             raise
 
     def export_to_json(self, path: str):
@@ -337,10 +337,10 @@ class MetricsTracker:
             with open(path, 'w') as f:
                 json.dump(export_data, f, indent=2)
 
-            print(f"[METRICS_TRACKER] ✓ Exported to JSON")
+            print(f"[METRICS_TRACKER] [OK] Exported to JSON")
 
         except Exception as e:
-            print(f"[METRICS_TRACKER] ✗ Export failed: {e}")
+            print(f"[METRICS_TRACKER] [X] Export failed: {e}")
             raise
 
     def print_summary(self):
@@ -468,7 +468,7 @@ def validate_loss_function(model, dataloader, verbose: bool = True) -> bool:
             if wrong_loss < correct_loss * 1.2:
                 issues.append("❌ Very wrong predictions don't have significantly higher loss")
                 if verbose:
-                    print(f"\n  ⚠️  WARNING: Loss doesn't penalize bad predictions enough")
+                    print(f"\n  [!]️  WARNING: Loss doesn't penalize bad predictions enough")
 
             if issues:
                 if verbose:
@@ -594,9 +594,9 @@ def validate_baseline_comparison(model, dataloader, verbose: bool = True) -> boo
             print(f"\n  ❌ CRITICAL: Model can't even predict the mean!")
 
     if improvement_random < 5:
-        issues.append("⚠️  Model barely improves over random (<5%)")
+        issues.append("[!]️  Model barely improves over random (<5%)")
         if verbose:
-            print(f"\n  ⚠️  WARNING: Very small improvement over baseline")
+            print(f"\n  [!]️  WARNING: Very small improvement over baseline")
 
     if issues:
         if verbose:
@@ -662,4 +662,4 @@ if __name__ == "__main__":
     tracker.export_to_csv('test_metrics.csv')
     tracker.export_to_json('test_metrics.json')
 
-    print(f"\n[TEST] ✓ All metrics tests passed!")
+    print(f"\n[TEST] [OK] All metrics tests passed!")

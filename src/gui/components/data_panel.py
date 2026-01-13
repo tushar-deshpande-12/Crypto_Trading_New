@@ -258,13 +258,13 @@ class DataPanel:
         self.fetch_btn.config(state=tk.NORMAL, text="🚀 Start Fetching Data")
 
         if success:
-            self.status_label.config(text="✓ Complete!", fg=get_color('success'))
+            self.status_label.config(text="[OK] Complete!", fg=get_color('success'))
             self.progress_var.set(100)
-            self._log(f"✓ SUCCESS: {message}")
+            self._log(f"[OK] SUCCESS: {message}")
         else:
-            self.status_label.config(text="✗ Failed", fg=get_color('danger'))
+            self.status_label.config(text="[X] Failed", fg=get_color('danger'))
             self.progress_var.set(0)
-            self._log(f"✗ FAILED: {message}")
+            self._log(f"[X] FAILED: {message}")
 
     def _log(self, message: str):
         """Add message to log"""

@@ -137,7 +137,7 @@ class CandlestickChartWindow:
         # Refresh button
         refresh_btn = tk.Button(
             control_frame,
-            text="↻ Refresh",
+            text="[R] Refresh",
             command=self._load_chart_data,
             bg="#0d47a1",
             fg="white",

@@ -42,7 +42,7 @@ def create_sliding_windows(
     # Verify DataFrame is sorted
     if 'datetime' in df.columns:
         if not df['datetime'].is_monotonic_increasing:
-            print(f"[WINDOWING] ⚠ Warning: DataFrame not sorted by datetime, sorting...")
+            print(f"[WINDOWING] [!] Warning: DataFrame not sorted by datetime, sorting...")
             df = df.sort_values('datetime').reset_index(drop=True)
 
     context_windows = []
@@ -84,19 +84,19 @@ def create_sliding_windows(
         # Verify window sizes
         if len(context_df) != context_length:
             if verbose:
-                print(f"[WINDOWING] ⚠ Skipping window {i}: context size {len(context_df)} != {context_length}")
+                print(f"[WINDOWING] [!] Skipping window {i}: context size {len(context_df)} != {context_length}")
             continue
 
         if len(target_df) != horizon:
             if verbose:
-                print(f"[WINDOWING] ⚠ Skipping window {i}: target size {len(target_df)} != {horizon}")
+                print(f"[WINDOWING] [!] Skipping window {i}: target size {len(target_df)} != {horizon}")
             continue
 
         context_windows.append(context_df)
         target_windows.append(target_df)
 
     if verbose:
-        print(f"[WINDOWING] ✓ Created {len(context_windows)} windows")
+        print(f"[WINDOWING] [OK] Created {len(context_windows)} windows")
 
         if len(context_windows) > 0:
             # Show sample window info
@@ -179,15 +179,15 @@ def create_windows_per_symbol(
             all_symbols.extend([symbol] * len(context_wins))
 
             if verbose:
-                print(f"[WINDOWING] ✓ Created {len(context_wins)} windows for {symbol}")
+                print(f"[WINDOWING] [OK] Created {len(context_wins)} windows for {symbol}")
 
         except ValueError as e:
             if verbose:
-                print(f"[WINDOWING] ⚠ Skipping {symbol}: {e}")
+                print(f"[WINDOWING] [!] Skipping {symbol}: {e}")
             continue
 
     if verbose:
-        print(f"\n[WINDOWING] ✓ Total windows created: {len(all_context_windows)}")
+        print(f"\n[WINDOWING] [OK] Total windows created: {len(all_context_windows)}")
         print(f"[WINDOWING]   - Distribution by symbol:")
 
         for symbol in symbols:
@@ -219,11 +219,11 @@ def verify_windows(
     print(f"[WINDOWING]   - Number of windows: {len(context_windows)}")
 
     if len(context_windows) != len(target_windows):
-        print(f"[WINDOWING] ✗ Mismatch: {len(context_windows)} context vs {len(target_windows)} target windows")
+        print(f"[WINDOWING] [X] Mismatch: {len(context_windows)} context vs {len(target_windows)} target windows")
         return False
 
     if len(context_windows) == 0:
-        print(f"[WINDOWING] ✗ No windows created!")
+        print(f"[WINDOWING] [X] No windows created!")
         return False
 
     # Check sizes
@@ -231,33 +231,33 @@ def verify_windows(
 
     for i, (ctx, tgt) in enumerate(zip(context_windows, target_windows)):
         if len(ctx) != expected_context_length:
-            print(f"[WINDOWING] ✗ Window {i}: context length {len(ctx)} != {expected_context_length}")
+            print(f"[WINDOWING] [X] Window {i}: context length {len(ctx)} != {expected_context_length}")
             issues += 1
 
         if len(tgt) != expected_horizon:
-            print(f"[WINDOWING] ✗ Window {i}: target length {len(tgt)} != {expected_horizon}")
+            print(f"[WINDOWING] [X] Window {i}: target length {len(tgt)} != {expected_horizon}")
             issues += 1
 
         # Check for NaN
         if ctx.isna().any().any():
             nan_count = ctx.isna().sum().sum()
-            print(f"[WINDOWING] ⚠ Window {i}: context has {nan_count} NaN values")
+            print(f"[WINDOWING] [!] Window {i}: context has {nan_count} NaN values")
 
         if tgt.isna().any().any():
             nan_count = tgt.isna().sum().sum()
-            print(f"[WINDOWING] ⚠ Window {i}: target has {nan_count} NaN values")
+            print(f"[WINDOWING] [!] Window {i}: target has {nan_count} NaN values")
 
         if issues >= 5:  # Limit output
             print(f"[WINDOWING]   - (stopping after 5 issues, may be more...)")
             break
 
     if issues == 0:
-        print(f"[WINDOWING] ✓ All windows verified successfully")
+        print(f"[WINDOWING] [OK] All windows verified successfully")
         print(f"[WINDOWING]   - Context shape: ({expected_context_length}, {context_windows[0].shape[1]})")
         print(f"[WINDOWING]   - Target shape: ({expected_horizon}, {target_windows[0].shape[1]})")
         return True
     else:
-        print(f"[WINDOWING] ✗ Found {issues} issues")
+        print(f"[WINDOWING] [X] Found {issues} issues")
         return False
 
 
@@ -294,7 +294,7 @@ def get_window_statistics(
         print(f"[WINDOWING]   - First datetime: {first_date}")
         print(f"[WINDOWING]   - Last datetime: {last_date}")
 
-    print(f"[WINDOWING] ✓ Statistics computed")
+    print(f"[WINDOWING] [OK] Statistics computed")
 
     for key, value in stats.items():
         print(f"[WINDOWING]   - {key}: {value}")
@@ -339,11 +339,11 @@ if __name__ == "__main__":
         stats = get_window_statistics(context_windows, target_windows)
 
         if is_valid:
-            print("\n[TEST] ✓ Windowing test passed!")
+            print("\n[TEST] [OK] Windowing test passed!")
         else:
-            print("\n[TEST] ✗ Windowing test failed!")
+            print("\n[TEST] [X] Windowing test failed!")
 
     except Exception as e:
-        print(f"\n[TEST] ✗ Test failed: {e}")
+        print(f"\n[TEST] [X] Test failed: {e}")
         import traceback
         traceback.print_exc()

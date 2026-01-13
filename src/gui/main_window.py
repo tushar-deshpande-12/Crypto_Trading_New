@@ -89,7 +89,7 @@ class CryptoTrackerGUI:
         search_entry.pack(side=tk.LEFT, padx=8, pady=15)
 
         # Refresh button
-        refresh_btn = tk.Button(control_frame, text="↻ Refresh",
+        refresh_btn = tk.Button(control_frame, text="[R] Refresh",
                                command=self._load_data,
                                bg="#0d47a1", fg="white",
                                font=('Arial', 10, 'bold'),

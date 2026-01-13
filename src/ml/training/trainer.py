@@ -32,7 +32,7 @@ try:
 
     TORCH_AVAILABLE = True
 except ImportError:
-    print("[TRAINER] ⚠ Warning: PyTorch/Lightning not installed")
+    print("[TRAINER] [!] Warning: PyTorch/Lightning not installed")
     TORCH_AVAILABLE = False
 
 from ..models import TFTConfig
@@ -104,7 +104,7 @@ class TFTTrainer:
         self.current_epoch: int = 0
 
         if self.verbose:
-            print(f"[TRAINER] ✓ TFTTrainer initialized")
+            print(f"[TRAINER] [OK] TFTTrainer initialized")
 
     def setup_model(self, train_dataset):
         """
@@ -124,10 +124,10 @@ class TFTTrainer:
             self.model_wrapper.create_from_dataset(train_dataset)
 
             if self.verbose:
-                print(f"[TRAINER] ✓ Model setup complete")
+                print(f"[TRAINER] [OK] Model setup complete")
 
         except Exception as e:
-            print(f"[TRAINER] ✗ Model setup failed: {e}")
+            print(f"[TRAINER] [X] Model setup failed: {e}")
             raise
 
     def setup_trainer(
@@ -181,7 +181,31 @@ class TFTTrainer:
             # Learning rate monitor
             lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
+            # Standard callbacks
             callbacks = [checkpoint_callback, early_stop_callback, lr_monitor]
+
+            # Add advanced training callbacks for better performance
+            # Temporarily disabled due to PyTorch Lightning 2.x compatibility
+            # Will be re-enabled after fixing callback signatures
+            if self.verbose:
+                print(f"[TRAINER]   [!] Advanced callbacks temporarily disabled")
+                print(f"[TRAINER]       (PyTorch Lightning 2.x compatibility fix in progress)")
+
+            # TODO: Re-enable after fixing callback signatures for Lightning 2.x
+            # try:
+            #     from src.ml.training.callbacks import create_training_callbacks
+            #     advanced_callbacks = create_training_callbacks(
+            #         self.config,
+            #         enable_warmup=self.config.warmup_enabled
+            #     )
+            #     callbacks.extend(advanced_callbacks)
+            #     if self.verbose:
+            #         print(f"[TRAINER]   OK Added {len(advanced_callbacks)} advanced callbacks:")
+            #         for cb in advanced_callbacks:
+            #             print(f"[TRAINER]      - {cb.__class__.__name__}")
+            # except Exception as e:
+            #     if self.verbose:
+            #         print(f"[TRAINER]   [!] Could not load advanced callbacks: {e}")
 
             # Add GUI progress callback if provided
             if self.progress_callback:
@@ -245,7 +269,7 @@ class TFTTrainer:
             )
 
             if self.verbose:
-                print(f"[TRAINER] ✓ PyTorch Lightning trainer setup complete")
+                print(f"[TRAINER] [OK] PyTorch Lightning trainer setup complete")
                 print(f"[TRAINER]   - Accelerator: {accelerator}")
                 print(f"[TRAINER]   - Devices: {devices}")
                 print(f"[TRAINER]   - Deterministic: {use_deterministic}")
@@ -254,7 +278,7 @@ class TFTTrainer:
                 print(f"[TRAINER]   - Early stopping patience: {self.config.early_stopping_patience}")
 
         except Exception as e:
-            print(f"[TRAINER] ✗ Trainer setup failed: {e}")
+            print(f"[TRAINER] [X] Trainer setup failed: {e}")
             raise
 
     def train(
@@ -322,7 +346,7 @@ class TFTTrainer:
                 print(f"[TRAINER] {status} - {step}")
 
             if not all_passed:
-                print(f"\n[TRAINER] ⚠️  WARNING: Some validation checks failed!")
+                print(f"\n[TRAINER] [!]️  WARNING: Some validation checks failed!")
                 print(f"[TRAINER] Training will continue, but results may be poor.")
             else:
                 print(f"\n[TRAINER] OK All validation checks passed! Ready to train.")
@@ -410,7 +434,7 @@ class TFTTrainer:
                 if "LightningModule" in str(e):
                     # Version mismatch - use pytorch-forecasting's Trainer wrapper
                     if self.verbose:
-                        print(f"[TRAINER] ⚠ PyTorch Lightning version mismatch detected")
+                        print(f"[TRAINER] [!] PyTorch Lightning version mismatch detected")
                         print(f"[TRAINER]   - Using pytorch-forecasting's training approach...")
 
                     # Import pytorch-forecasting's Trainer
@@ -463,7 +487,7 @@ class TFTTrainer:
             self.metrics_tracker.print_summary()
 
         except KeyboardInterrupt:
-            print(f"\n[TRAINER] ⚠ Training interrupted by user")
+            print(f"\n[TRAINER] [!] Training interrupted by user")
             print(f"[TRAINER]   - Completed epochs: {self.current_epoch}")
 
             # Save current state
@@ -471,7 +495,7 @@ class TFTTrainer:
                 print(f"[TRAINER]   - Saving interrupted training state...")
 
         except Exception as e:
-            print(f"\n[TRAINER] ✗ Training failed: {e}")
+            print(f"\n[TRAINER] [X] Training failed: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -551,12 +575,12 @@ class TFTTrainer:
             self.config.save_json(str(config_path))
 
             if self.verbose:
-                print(f"[TRAINER] ✓ Best model saved")
+                print(f"[TRAINER] [OK] Best model saved")
                 print(f"[TRAINER]   - Model: {path}")
                 print(f"[TRAINER]   - Config: {config_path}")
 
         except Exception as e:
-            print(f"[TRAINER] ✗ Failed to save best model: {e}")
+            print(f"[TRAINER] [X] Failed to save best model: {e}")
             raise
 
     def export_metrics(self, output_dir: str):
@@ -582,12 +606,12 @@ class TFTTrainer:
             self.metrics_tracker.export_to_json(str(json_path))
 
             if self.verbose:
-                print(f"[TRAINER] ✓ Metrics exported")
+                print(f"[TRAINER] [OK] Metrics exported")
                 print(f"[TRAINER]   - CSV: {csv_path}")
                 print(f"[TRAINER]   - JSON: {json_path}")
 
         except Exception as e:
-            print(f"[TRAINER] ✗ Failed to export metrics: {e}")
+            print(f"[TRAINER] [X] Failed to export metrics: {e}")
             raise
 
     def get_training_summary(self) -> Dict[str, Any]:
@@ -620,7 +644,7 @@ class TFTTrainer:
             }
 
         if self.verbose:
-            print(f"[TRAINER] ✓ Training summary generated")
+            print(f"[TRAINER] [OK] Training summary generated")
             for key, value in summary.items():
                 if key != 'config':  # Skip config dict for brevity
                     print(f"[TRAINER]   - {key}: {value}")
@@ -685,7 +709,7 @@ def train_model(
     best_model_path = Path(checkpoint_dir) / "best_model.ckpt"
     trainer.save_best_model(str(best_model_path))
 
-    print(f"\n[TRAIN_MODEL] ✓ Training pipeline complete")
+    print(f"\n[TRAIN_MODEL] [OK] Training pipeline complete")
     print(f"[TRAIN_MODEL]   - Best model: {best_model_path}")
 
     return trainer.model_wrapper
@@ -714,4 +738,4 @@ if __name__ == "__main__":
         # Get summary
         summary = trainer.get_training_summary()
 
-        print(f"\n[TEST] ✓ Trainer initialization test passed!")
+        print(f"\n[TEST] [OK] Trainer initialization test passed!")
