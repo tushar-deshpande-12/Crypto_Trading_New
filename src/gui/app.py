@@ -27,6 +27,7 @@ try:
     from src.ml.training.dataset import create_dataloaders
     from src.ml.models.model_config import TFTConfig
     from src.ml.training.trainer import TFTTrainer
+    from src.ml.training.model_evaluator import safe_direction_accuracy
     ML_AVAILABLE = True
 except ImportError as e:
     ML_AVAILABLE = False
@@ -742,47 +743,97 @@ class CryptoAIPredictorApp:
 
                 # STEP 4: Load model first to get training dataset parameters
                 self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Loading trained model..."))
-                crypto_tft = CryptoTFT.load_model(model_path, verbose=False)
+                loaded_model = CryptoTFT.load_model(model_path, verbose=False)
 
-                # Get training dataset from model (TFT models store this internally)
-                if not hasattr(crypto_tft.model, 'dataset_parameters'):
-                    raise ValueError("Model doesn't have training dataset parameters. Please retrain the model.")
+                # Check if this is an LSTM model or TFT model
+                from src.ml.models.lstm_model import SimpleLSTMTrainer
+                is_lstm_model = isinstance(loaded_model, SimpleLSTMTrainer)
 
-                # Create prediction dataset using from_parameters to match training config
-                from pytorch_forecasting import TimeSeriesDataSet
+                if is_lstm_model:
+                    # LSTM prediction path
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Detected LSTM model"))
+                    lstm_trainer = loaded_model
 
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Creating dataset from model training parameters..."))
+                    # Get the last sequence_length rows for prediction
+                    sequence_length = lstm_trainer.sequence_length
+                    if len(live_df) < sequence_length:
+                        raise ValueError(f"Not enough data for prediction. Need {sequence_length} rows, have {len(live_df)}")
 
-                # Modify parameters to allow unknown categories
-                params = crypto_tft.model.dataset_parameters.copy()
-                if 'categorical_encoders' in params:
-                    for key, encoder in params['categorical_encoders'].items():
-                        if hasattr(encoder, 'add_nan'):
-                            encoder.add_nan = True
+                    # Prepare input sequence directly (don't use SimpleLSTMDataset for single prediction)
+                    # Get feature columns (same logic as SimpleLSTMDataset)
+                    exclude_cols = ['datetime', 'symbol', 'timestamp', 'close_time',
+                                  'hour', 'day_of_week', 'day_of_month', 'month', 'time_idx']
+                    numeric_cols = live_df.select_dtypes(include=[np.number]).columns.tolist()
+                    feature_columns = [col for col in numeric_cols if col not in exclude_cols]
 
-                prediction_dataset = TimeSeriesDataSet.from_parameters(
-                    params,
-                    live_df,
-                    predict=True,  # Inference mode
-                    stop_randomization=True  # No augmentation
-                )
+                    # Get the last sequence_length rows as input
+                    input_data = live_df.tail(sequence_length)[feature_columns].values.astype(np.float32)
+                    input_tensor = torch.FloatTensor(input_data).unsqueeze(0)  # (1, seq_len, features)
 
-                # Create DataLoader
-                live_loader = prediction_dataset.to_dataloader(
-                    train=False,  # Inference mode: no shuffling
-                    batch_size=1,
-                    num_workers=0
-                )
+                    self.root.after(0, lambda sl=sequence_length, nf=len(feature_columns):
+                        self.ml_panel.log_message(f"[PREDICTION] Input: {sl} timesteps, {nf} features"))
 
-                self.root.after(0, lambda: self.ml_panel.log_message(
-                    f"[PREDICTION] OK Dataset created with {len(prediction_dataset)} samples"
-                ))
+                    # Run prediction
+                    model = lstm_trainer.model
+                    model.eval()
+                    device = next(model.parameters()).device
+                    input_tensor = input_tensor.to(device)
 
-                # STEP 5: Generate predictions (model already loaded)
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Generating predictions from current market data..."))
-                predictions = crypto_tft.predict_next_n_hours(live_loader, n_hours=10)
+                    with torch.no_grad():
+                        preds = model(input_tensor)
+                        pred_values = preds.squeeze(0).cpu().numpy()
 
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] OK Predictions generated!"))
+                    # Format predictions like TFT output
+                    predictions = {
+                        'prediction': pred_values,
+                        'median': pred_values,
+                    }
+
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] OK LSTM predictions generated!"))
+
+                else:
+                    # TFT prediction path
+                    crypto_tft = loaded_model
+
+                    # Get training dataset from model (TFT models store this internally)
+                    if not hasattr(crypto_tft.model, 'dataset_parameters'):
+                        raise ValueError("Model doesn't have training dataset parameters. Please retrain the model.")
+
+                    # Create prediction dataset using from_parameters to match training config
+                    from pytorch_forecasting import TimeSeriesDataSet
+
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Creating dataset from model training parameters..."))
+
+                    # Modify parameters to allow unknown categories
+                    params = crypto_tft.model.dataset_parameters.copy()
+                    if 'categorical_encoders' in params:
+                        for key, encoder in params['categorical_encoders'].items():
+                            if hasattr(encoder, 'add_nan'):
+                                encoder.add_nan = True
+
+                    prediction_dataset = TimeSeriesDataSet.from_parameters(
+                        params,
+                        live_df,
+                        predict=True,  # Inference mode
+                        stop_randomization=True  # No augmentation
+                    )
+
+                    # Create DataLoader
+                    live_loader = prediction_dataset.to_dataloader(
+                        train=False,  # Inference mode: no shuffling
+                        batch_size=1,
+                        num_workers=0
+                    )
+
+                    self.root.after(0, lambda: self.ml_panel.log_message(
+                        f"[PREDICTION] OK Dataset created with {len(prediction_dataset)} samples"
+                    ))
+
+                    # STEP 5: Generate predictions (model already loaded)
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Generating predictions from current market data..."))
+                    predictions = crypto_tft.predict_next_n_hours(live_loader, n_hours=10)
+
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] OK Predictions generated!"))
 
                 # STEP 6: Denormalize and display
                 scaler = preprocessor.scalers.get(symbol)
@@ -855,129 +906,199 @@ class CryptoAIPredictorApp:
 
                 # Load model first to get training dataset parameters
                 self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Loading model..."))
-                crypto_tft = CryptoTFT.load_model(model_path, verbose=False)
+                loaded_model = CryptoTFT.load_model(model_path, verbose=False)
 
-                # Check if model has dataset parameters
-                if not hasattr(crypto_tft.model, 'dataset_parameters'):
-                    raise ValueError("Model doesn't have training dataset parameters. Please retrain the model.")
+                # Check if this is an LSTM model (SimpleLSTMTrainer) or TFT model (CryptoTFT)
+                from src.ml.models.lstm_model import SimpleLSTMTrainer
+                is_lstm_model = isinstance(loaded_model, SimpleLSTMTrainer)
 
-                # Add time index for TFT
-                test_df = preprocessor.add_time_index(test_df)
+                if is_lstm_model:
+                    # LSTM model testing path
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Detected LSTM model"))
+                    lstm_trainer = loaded_model
 
-                # Create test dataset with SMALLER context to get more samples
-                from pytorch_forecasting import TimeSeriesDataSet
+                    # Create LSTM test dataset
+                    from src.ml.models.lstm_model import SimpleLSTMDataset
+                    from torch.utils.data import DataLoader
 
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Creating test dataset from model training parameters..."))
+                    test_dataset = SimpleLSTMDataset(
+                        test_df,
+                        sequence_length=lstm_trainer.sequence_length,
+                        prediction_horizon=lstm_trainer.prediction_horizon
+                    )
 
-                # Modify parameters to allow unknown categories and use smaller context
-                params = crypto_tft.model.dataset_parameters.copy()
+                    self.root.after(0, lambda n=len(test_dataset):
+                        self.ml_panel.log_message(f"[TEST] LSTM dataset created with {n} samples"))
 
-                # CRITICAL: Reduce encoder length for testing to get more samples
-                # Instead of 2000, use min(500, len(test_df) // 4)
-                original_encoder_length = params.get('max_encoder_length', 2000)
-                test_encoder_length = min(168, len(test_df) // 10)  # Use 1 week or 10% of data
-                params['max_encoder_length'] = test_encoder_length
+                    test_loader = DataLoader(
+                        test_dataset,
+                        batch_size=min(32, len(test_dataset)),
+                        shuffle=False,
+                        num_workers=0
+                    )
 
-                self.root.after(0, lambda orig=original_encoder_length, new=test_encoder_length:
-                    self.ml_panel.log_message(f"[TEST] Using encoder_length={new} (training used {orig}) to get more test samples"))
+                    # Run LSTM predictions
+                    model = lstm_trainer.model
+                    model.eval()
+                    device = next(model.parameters()).device
 
-                if 'categorical_encoders' in params:
-                    for key, encoder in params['categorical_encoders'].items():
-                        if hasattr(encoder, 'add_nan'):
-                            encoder.add_nan = True
+                    all_predictions = []
+                    all_actuals = []
 
-                test_dataset = TimeSeriesDataSet.from_parameters(
-                    params,
-                    test_df,
-                    predict=True,  # Inference mode
-                    stop_randomization=True  # No augmentation
-                )
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Processing {len(test_loader)} LSTM batches..."))
 
-                self.root.after(0, lambda n=len(test_dataset):
-                    self.ml_panel.log_message(f"[TEST] Dataset created with {n} valid sequences"))
-
-                # Create DataLoader with smaller batch size for more batches
-                config = TFTConfig()
-                test_loader = test_dataset.to_dataloader(
-                    train=False,  # Inference mode: no shuffling
-                    batch_size=min(32, config.batch_size),  # Smaller batches = more iterations
-                    num_workers=0
-                )
-
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] OK Test dataset created with {len(test_dataset)} samples"))
-
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Running predictions on test set..."))
-
-                # Generate predictions on test set
-                model = crypto_tft.model
-                model.eval()
-
-                # Detect model device
-                device = next(model.parameters()).device
-                self.root.after(0, lambda d=str(device): self.ml_panel.log_message(f"[TEST] Model device: {d}"))
-
-                all_predictions = []
-                all_actuals = []
-
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Processing {len(test_loader)} batches..."))
-
-                # Process ALL batches to get comprehensive test results
-                with torch.no_grad():
-                    for batch_idx, batch in enumerate(test_loader):
-                        # Batch is a tuple: (x, y) where x is dict of inputs, y is target
-                        if isinstance(batch, (tuple, list)):
-                            x, y = batch
-                        else:
-                            x = batch
-                            y = None
-
-                        # Move batch to model device
-                        if isinstance(x, dict):
-                            x = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in x.items()}
-                        elif isinstance(x, torch.Tensor):
+                    with torch.no_grad():
+                        for batch_idx, (x, y) in enumerate(test_loader):
                             x = x.to(device)
+                            y = y.to(device)
 
-                        if y is not None:
-                            if isinstance(y, torch.Tensor):
-                                y = y.to(device)
-                            elif isinstance(y, (tuple, list)):
-                                y = tuple(yi.to(device) if isinstance(yi, torch.Tensor) else yi for yi in y)
+                            preds = model(x)  # (batch, prediction_horizon)
+                            all_predictions.extend(preds[:, 0].cpu().numpy())  # First prediction
+                            all_actuals.extend(y[:, 0].cpu().numpy())  # First target
 
-                        # Get predictions - pass the input dict
-                        outputs = model(x)
+                    predictions_arr = np.array(all_predictions)
+                    actuals_arr = np.array(all_actuals)
 
-                        # Extract predictions
-                        if hasattr(outputs, 'prediction'):
-                            preds = outputs.prediction.cpu().numpy()
-                        else:
-                            preds = outputs[0].cpu().numpy() if isinstance(outputs, tuple) else outputs.cpu().numpy()
+                else:
+                    # TFT model testing path
+                    crypto_tft = loaded_model
 
-                        # Get actual values from target
-                        if y is not None:
-                            actuals = y[0].cpu().numpy() if isinstance(y, tuple) else y.cpu().numpy()
-                        else:
-                            # Fall back to getting from x dict if y not available
-                            actuals = x['encoder_target'].cpu().numpy()
+                    # Check if model has dataset parameters
+                    if not hasattr(crypto_tft.model, 'dataset_parameters'):
+                        raise ValueError("Model doesn't have training dataset parameters. Please retrain the model.")
 
-                        # Handle different output shapes
-                        if len(preds.shape) == 3:
-                            all_predictions.extend(preds[:, 0, 0])  # (batch, time, features)
-                        elif len(preds.shape) == 2:
-                            all_predictions.extend(preds[:, 0])  # (batch, time)
-                        else:
-                            all_predictions.extend(preds)
+                    # Add time index for TFT
+                    test_df = preprocessor.add_time_index(test_df)
 
-                        # Handle actual values
-                        if len(actuals.shape) == 2:
-                            all_actuals.extend(actuals[:, -1])  # Last encoder value
-                        else:
-                            all_actuals.extend(actuals)
+                    # Create test dataset with SMALLER context to get more samples
+                    from pytorch_forecasting import TimeSeriesDataSet
 
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Creating test dataset from model training parameters..."))
+
+                    # Modify parameters to allow unknown categories and use smaller context
+                    params = crypto_tft.model.dataset_parameters.copy()
+
+                    # CRITICAL: Reduce encoder length for testing to get more samples
+                    # Use a small encoder length to maximize number of test samples
+                    original_encoder_length = params.get('max_encoder_length', 2000)
+                    prediction_length = params.get('max_prediction_length', 10)
+
+                    # Calculate how many samples we can get with different encoder lengths
+                    # Each sample needs (encoder_length + prediction_length) rows
+                    # Target at least 50 test samples, ideally 200+
+                    available_rows = len(test_df)
+                    target_samples = 100
+
+                    # Calculate ideal encoder length to get target_samples
+                    # available_rows = encoder_length + prediction_length + (target_samples - 1)
+                    # encoder_length = available_rows - prediction_length - target_samples + 1
+                    ideal_encoder_length = available_rows - prediction_length - target_samples + 1
+                    test_encoder_length = max(24, min(168, ideal_encoder_length))  # Between 24 hours and 1 week
+
+                    params['max_encoder_length'] = test_encoder_length
+
+                    estimated_samples = max(1, available_rows - test_encoder_length - prediction_length + 1)
+                    self.root.after(0, lambda orig=original_encoder_length, new=test_encoder_length, est=estimated_samples:
+                        self.ml_panel.log_message(f"[TEST] Using encoder_length={new} (training used {orig}), estimated ~{est} samples"))
+
+                    if 'categorical_encoders' in params:
+                        for key, encoder in params['categorical_encoders'].items():
+                            if hasattr(encoder, 'add_nan'):
+                                encoder.add_nan = True
+
+                    test_dataset = TimeSeriesDataSet.from_parameters(
+                        params,
+                        test_df,
+                        predict=False,  # Use training-style mode to get more samples
+                        stop_randomization=True  # No augmentation for consistent evaluation
+                    )
+
+                    self.root.after(0, lambda n=len(test_dataset):
+                        self.ml_panel.log_message(f"[TEST] Dataset created with {n} valid sequences"))
+
+                    # Create DataLoader with smaller batch size for more batches
+                    config = TFTConfig()
+                    test_loader = test_dataset.to_dataloader(
+                        train=False,  # Inference mode: no shuffling
+                        batch_size=min(32, config.batch_size),  # Smaller batches = more iterations
+                        num_workers=0
+                    )
+
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] OK Test dataset created with {len(test_dataset)} samples"))
+
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Running predictions on test set..."))
+
+                    # Generate predictions on test set
+                    model = crypto_tft.model
+                    model.eval()
+
+                    # Detect model device
+                    device = next(model.parameters()).device
+                    self.root.after(0, lambda d=str(device): self.ml_panel.log_message(f"[TEST] Model device: {d}"))
+
+                    all_predictions = []
+                    all_actuals = []
+
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Processing {len(test_loader)} batches..."))
+
+                    # Process ALL batches to get comprehensive test results
+                    with torch.no_grad():
+                        for batch_idx, batch in enumerate(test_loader):
+                            # Batch is a tuple: (x, y) where x is dict of inputs, y is target
+                            if isinstance(batch, (tuple, list)):
+                                x, y = batch
+                            else:
+                                x = batch
+                                y = None
+
+                            # Move batch to model device
+                            if isinstance(x, dict):
+                                x = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in x.items()}
+                            elif isinstance(x, torch.Tensor):
+                                x = x.to(device)
+
+                            if y is not None:
+                                if isinstance(y, torch.Tensor):
+                                    y = y.to(device)
+                                elif isinstance(y, (tuple, list)):
+                                    y = tuple(yi.to(device) if isinstance(yi, torch.Tensor) else yi for yi in y)
+
+                            # Get predictions - pass the input dict
+                            outputs = model(x)
+
+                            # Extract predictions
+                            if hasattr(outputs, 'prediction'):
+                                preds = outputs.prediction.cpu().numpy()
+                            else:
+                                preds = outputs[0].cpu().numpy() if isinstance(outputs, tuple) else outputs.cpu().numpy()
+
+                            # Get actual values from target
+                            if y is not None:
+                                actuals = y[0].cpu().numpy() if isinstance(y, tuple) else y.cpu().numpy()
+                            else:
+                                # Fall back to getting from x dict if y not available
+                                actuals = x['encoder_target'].cpu().numpy()
+
+                            # Handle different output shapes
+                            if len(preds.shape) == 3:
+                                all_predictions.extend(preds[:, 0, 0])  # (batch, time, features)
+                            elif len(preds.shape) == 2:
+                                all_predictions.extend(preds[:, 0])  # (batch, time)
+                            else:
+                                all_predictions.extend(preds)
+
+                            # Handle actual values
+                            if len(actuals.shape) == 2:
+                                all_actuals.extend(actuals[:, -1])  # Last encoder value
+                            else:
+                                all_actuals.extend(actuals)
+
+                    # Convert to numpy arrays for TFT
+                    predictions_arr = np.array(all_predictions)
+                    actuals_arr = np.array(all_actuals)
+
+                # Common metrics calculation for both LSTM and TFT
                 self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Calculating metrics..."))
-
-                # Convert to numpy arrays
-                predictions_arr = np.array(all_predictions)
-                actuals_arr = np.array(all_actuals)
 
                 # Log shapes for debugging
                 print(f"[TEST] Predictions shape: {predictions_arr.shape}, Actuals shape: {actuals_arr.shape}")
@@ -1030,10 +1151,8 @@ class CryptoAIPredictorApp:
                 mae = np.mean(np.abs(pred_denorm - actual_denorm))
                 rmse = np.sqrt(np.mean((pred_denorm - actual_denorm) ** 2))
 
-                # Directional accuracy
-                actual_direction = np.diff(actual_denorm) > 0
-                pred_direction = np.diff(pred_denorm) > 0
-                directional_accuracy = np.mean(actual_direction == pred_direction) * 100
+                # Directional accuracy (using safe calculation to prevent NaN)
+                directional_accuracy = safe_direction_accuracy(pred_denorm, actual_denorm)
 
                 # Test loss (normalized)
                 test_loss = np.mean((predictions_arr - actuals_arr) ** 2)
@@ -1097,22 +1216,21 @@ class CryptoAIPredictorApp:
                 trade_fee = config['trade_fee']
                 confidence_threshold = config['confidence_threshold']
 
-                # Determine model type from path
-                if 'lstm' in model_path.lower():
-                    from src.ml.models.lstm_model import SimpleLSTMTrainer
+                # Use unified model loading (auto-detects LSTM vs TFT)
+                from src.ml.models.tft_model import CryptoTFT
+                from src.ml.models.lstm_model import SimpleLSTMTrainer
 
-                    # Load LSTM model
-                    lstm_trainer = SimpleLSTMTrainer()
-                    lstm_trainer.load_model(model_path)
-                    model = lstm_trainer.model
+                loaded_model = CryptoTFT.load_model(model_path, verbose=False)
+
+                # Determine model type from loaded object
+                if isinstance(loaded_model, SimpleLSTMTrainer):
+                    model = loaded_model.model
                     model_type = 'lstm'
+                    lstm_trainer = loaded_model
                 else:
-                    from src.ml.models.tft_model import CryptoTFT
-
-                    # Load TFT model
-                    crypto_tft = CryptoTFT.load_model(model_path, verbose=False)
-                    model = crypto_tft.model
+                    model = loaded_model.model
                     model_type = 'tft'
+                    crypto_tft = loaded_model
 
                 # Load preprocessed test data
                 preprocessor = CryptoPreprocessor(dataset_dir="dataset")
@@ -1141,7 +1259,13 @@ class CryptoAIPredictorApp:
                         # LSTM predictions
                         from src.ml.models.lstm_model import SimpleLSTMDataset
 
-                        test_dataset = SimpleLSTMDataset(test_df, sequence_length=168)
+                        test_dataset = SimpleLSTMDataset(
+                            test_df,
+                            sequence_length=lstm_trainer.sequence_length,
+                            prediction_horizon=lstm_trainer.prediction_horizon
+                        )
+
+                        print(f"[APP] LSTM backtest: {len(test_dataset)} samples available")
 
                         for i in range(min(len(test_dataset), 500)):  # Limit to 500 samples
                             x, y = test_dataset[i]

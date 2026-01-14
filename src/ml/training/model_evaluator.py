@@ -18,6 +18,55 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 
+def safe_direction_accuracy(predictions: np.ndarray, actuals: np.ndarray,
+                           threshold: float = 0.0) -> float:
+    """
+    Safely compute directional accuracy with validation to prevent NaN errors
+
+    This function calculates the percentage of times the predicted direction
+    (up/down) matches the actual direction between consecutive values.
+
+    Args:
+        predictions: Predicted values array
+        actuals: Actual values array
+        threshold: Minimum change threshold to consider as directional movement
+                  (default: 0.0, any change counts)
+
+    Returns:
+        Directional accuracy percentage (0-100), or 0.0 if insufficient data
+
+    Examples:
+        >>> preds = np.array([100, 102, 101, 105])
+        >>> actuals = np.array([100, 103, 100, 104])
+        >>> safe_direction_accuracy(preds, actuals)
+        66.67  # 2 out of 3 directions correct
+    """
+    # Validate inputs
+    if len(predictions) < 2 or len(actuals) < 2:
+        return 0.0
+
+    # Handle length mismatch
+    if len(predictions) != len(actuals):
+        min_len = min(len(predictions), len(actuals))
+        predictions = predictions[:min_len]
+        actuals = actuals[:min_len]
+
+    # Calculate differences
+    pred_diff = np.diff(predictions)
+    actual_diff = np.diff(actuals)
+
+    # Edge case: no differences to compare
+    if len(pred_diff) == 0:
+        return 0.0
+
+    # Calculate direction (True = up, False = down)
+    pred_direction = pred_diff > threshold
+    actual_direction = actual_diff > threshold
+
+    # Calculate accuracy
+    return float(np.mean(pred_direction == actual_direction) * 100)
+
+
 class ModelEvaluator:
     """
     Comprehensive model evaluation on train/val/test sets
@@ -144,12 +193,14 @@ class ModelEvaluator:
         ss_tot = np.sum((target_flat - np.mean(target_flat)) ** 2)
         r2 = 1 - (ss_res / (ss_tot + 1e-8))
 
-        # Direction accuracy (for time series)
+        # Direction accuracy (for time series) - using safe calculation
         if predictions.shape[1] > 1:
-            # Predict direction: up/down from previous timestep
-            target_direction = np.diff(targets, axis=1) > 0  # (n_samples, time-1)
-            pred_direction = np.diff(predictions, axis=1) > 0
-            direction_acc = np.mean(target_direction == pred_direction) * 100
+            # Calculate direction accuracy for each sample and average
+            direction_accs = []
+            for i in range(len(predictions)):
+                acc = safe_direction_accuracy(predictions[i], targets[i])
+                direction_accs.append(acc)
+            direction_acc = np.mean(direction_accs) if direction_accs else 0.0
         else:
             direction_acc = 0.0
 

@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 from pathlib import Path
+from src.ml.training.model_evaluator import safe_direction_accuracy
 
 
 @dataclass
@@ -302,10 +303,8 @@ class CryptoBacktester:
         ss_tot = np.sum((actual_prices - np.mean(actual_prices)) ** 2)
         r2 = 1 - (ss_res / (ss_tot + 1e-8))
 
-        # Direction accuracy
-        pred_direction = np.sign(np.diff(predictions, prepend=predictions[0]))
-        actual_direction = np.sign(np.diff(actual_prices, prepend=actual_prices[0]))
-        direction_accuracy = (np.sum(pred_direction == actual_direction) / len(predictions)) * 100
+        # Direction accuracy (using safe calculation to prevent NaN)
+        direction_accuracy = safe_direction_accuracy(predictions, actual_prices)
 
         # Equity curve
         equity_curve = pd.Series(equity_values, index=timestamps)

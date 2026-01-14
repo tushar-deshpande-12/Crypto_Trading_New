@@ -10,12 +10,14 @@ import queue
 from pathlib import Path
 from typing import Optional, Callable, Dict, List, Any
 import json
+import numpy as np
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
 from src.core.config import AppConfig
 from src.gui.styles import get_color
+from src.ml.training.model_evaluator import safe_direction_accuracy
 
 
 class MLPanel:
@@ -921,20 +923,44 @@ class MLPanel:
         graph_frame = tk.Frame(section, bg=get_color('bg_medium'))
         graph_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
 
-        # Create matplotlib figure for test results
-        self.test_fig = Figure(figsize=(10, 5), facecolor=get_color('bg_medium'))
-        self.test_ax = self.test_fig.add_subplot(111)
-        self.test_ax.set_facecolor(get_color('bg_light'))
-        self.test_ax.set_title('Actual vs Predicted (Test Set)', color=get_color('text_primary'))
-        self.test_ax.set_xlabel('Sample Index', color=get_color('text_primary'))
-        self.test_ax.set_ylabel('Price (Normalized)', color=get_color('text_primary'))
-        self.test_ax.tick_params(colors=get_color('text_primary'))
-        self.test_ax.grid(True, alpha=0.3)
+        # Create matplotlib figure with 3x2 grid layout for comprehensive test results
+        self.test_fig = Figure(figsize=(14, 10), facecolor=get_color('bg_medium'))
+        from matplotlib.gridspec import GridSpec
+        gs = GridSpec(3, 2, figure=self.test_fig, hspace=0.3, wspace=0.3)
+
+        # Subplot 1: Actual vs Predicted (top row, full width)
+        self.test_ax1 = self.test_fig.add_subplot(gs[0, :])
+        self.test_ax1.set_facecolor(get_color('bg_light'))
+        self.test_ax1.set_title('Actual vs Predicted (Test Set)', color=get_color('text_primary'))
+        self.test_ax1.tick_params(colors=get_color('text_primary'))
+        self.test_ax1.grid(True, alpha=0.3)
+
+        # Subplot 2: Direction Accuracy Over Time (middle left)
+        self.test_ax2 = self.test_fig.add_subplot(gs[1, 0])
+        self.test_ax2.set_facecolor(get_color('bg_light'))
+        self.test_ax2.tick_params(colors=get_color('text_primary'))
+
+        # Subplot 3: Error Distribution (middle right)
+        self.test_ax3 = self.test_fig.add_subplot(gs[1, 1])
+        self.test_ax3.set_facecolor(get_color('bg_light'))
+        self.test_ax3.tick_params(colors=get_color('text_primary'))
+
+        # Subplot 4: Confusion Matrix (bottom left)
+        self.test_ax4 = self.test_fig.add_subplot(gs[2, 0])
+        self.test_ax4.set_facecolor(get_color('bg_light'))
+        self.test_ax4.tick_params(colors=get_color('text_primary'))
+
+        # Subplot 5: Metrics Summary (bottom right)
+        self.test_ax5 = self.test_fig.add_subplot(gs[2, 1])
+        self.test_ax5.set_facecolor(get_color('bg_light'))
 
         # Embed in tkinter
         self.test_canvas = FigureCanvasTkAgg(self.test_fig, graph_frame)
         self.test_canvas.draw()
         self.test_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Keep reference to old test_ax for backward compatibility
+        self.test_ax = self.test_ax1
 
         print(f"[ML_PANEL]   - Model testing section created")
 
@@ -1186,7 +1212,7 @@ class MLPanel:
         """Browse for pre-trained model checkpoint"""
         filepath = filedialog.askopenfilename(
             title="Select Pre-trained Model Checkpoint",
-            filetypes=[("Checkpoint files", "*.ckpt"), ("All files", "*.*")],
+            filetypes=[("Checkpoint files", "*.ckpt *.pt"), ("Lightning checkpoints", "*.ckpt"), ("PyTorch models", "*.pt"), ("All files", "*.*")],
             initialdir="models/checkpoints"
         )
 
@@ -1198,7 +1224,7 @@ class MLPanel:
         """Browse for model checkpoint"""
         filepath = filedialog.askopenfilename(
             title="Select Model Checkpoint",
-            filetypes=[("Checkpoint files", "*.ckpt"), ("All files", "*.*")]
+            filetypes=[("Checkpoint files", "*.ckpt *.pt"), ("Lightning checkpoints", "*.ckpt"), ("PyTorch models", "*.pt"), ("All files", "*.*")]
         )
 
         if filepath:
@@ -1279,18 +1305,18 @@ class MLPanel:
 
             print(f"[ML_PANEL]   - Metrics labels updated")
 
-            # Update graph
-            self.test_ax.clear()
-            self.test_ax.set_facecolor(get_color('bg_light'))
-            self.test_ax.set_xlabel('Sample Index', color=get_color('text_primary'))
-            self.test_ax.set_ylabel('Price ($)', color=get_color('text_primary'))
-            self.test_ax.set_title('Actual vs Predicted (Test Set)', color=get_color('text_primary'))
-            self.test_ax.tick_params(colors=get_color('text_primary'))
-            self.test_ax.grid(True, alpha=0.3)
+            # Convert to numpy arrays for plotting
+            actuals_arr = np.array(actuals)
+            predictions_arr = np.array(predictions)
 
-            print(f"[ML_PANEL]   - Graph cleared and configured")
+            # Clear all axes
+            self.test_ax1.clear()
+            self.test_ax2.clear()
+            self.test_ax3.clear()
+            self.test_ax4.clear()
+            self.test_ax5.clear()
 
-            # Plot data (limit to last 100 samples for clarity)
+            # Plot data (limit to last 100 samples for clarity on main graph)
             plot_actuals = actuals
             plot_predictions = predictions
 
@@ -1302,17 +1328,43 @@ class MLPanel:
             print(f"[ML_PANEL]   - Plotting {len(sample_indices)} samples...")
             print(f"[ML_PANEL]   - Y-axis range: actuals [{min(plot_actuals):.2f}, {max(plot_actuals):.2f}], predictions [{min(plot_predictions):.2f}, {max(plot_predictions):.2f}]")
 
-            # Plot with explicit parameters
-            line1 = self.test_ax.plot(sample_indices, plot_actuals, label='Actual', color='#4fc3f7', linewidth=2, alpha=0.8)
-            line2 = self.test_ax.plot(sample_indices, plot_predictions, label='Predicted', color='#ff9800', linewidth=2, alpha=0.8, linestyle='--')
+            # Graph 1: Actual vs Predicted (existing graph, enhanced)
+            self.test_ax1.set_facecolor(get_color('bg_light'))
+            self.test_ax1.set_xlabel('Sample Index', color=get_color('text_primary'))
+            self.test_ax1.set_ylabel('Price ($)', color=get_color('text_primary'))
+            self.test_ax1.set_title('Actual vs Predicted (Test Set)', color=get_color('text_primary'))
+            self.test_ax1.tick_params(colors=get_color('text_primary'))
+            self.test_ax1.grid(True, alpha=0.3)
 
-            print(f"[ML_PANEL]   - Plot objects created: {line1}, {line2}")
+            line1 = self.test_ax1.plot(sample_indices, plot_actuals, label='Actual', color='#4fc3f7', linewidth=2, alpha=0.8)
+            line2 = self.test_ax1.plot(sample_indices, plot_predictions, label='Predicted', color='#ff9800', linewidth=2, alpha=0.8, linestyle='--')
+            self.test_ax1.legend()
 
-            self.test_ax.legend()
+            print(f"[ML_PANEL]   - Graph 1 (Actual vs Predicted) plotted")
 
-            print(f"[ML_PANEL]   - Data plotted, drawing canvas...")
+            # Graph 2: Direction Accuracy Over Time
+            self._plot_direction_accuracy_over_time(actuals_arr, predictions_arr, self.test_ax2)
+            print(f"[ML_PANEL]   - Graph 2 (Direction Accuracy Over Time) plotted")
+
+            # Graph 3: Error Distribution
+            self._plot_error_distribution(actuals_arr, predictions_arr, self.test_ax3)
+            print(f"[ML_PANEL]   - Graph 3 (Error Distribution) plotted")
+
+            # Graph 4: Confusion Matrix
+            self._plot_direction_confusion_matrix(actuals_arr, predictions_arr, self.test_ax4)
+            print(f"[ML_PANEL]   - Graph 4 (Confusion Matrix) plotted")
+
+            # Graph 5: Metrics Summary
+            enhanced_metrics = metrics.copy()
+            enhanced_metrics['test_samples'] = len(actuals)
+            enhanced_metrics['actuals'] = actuals
+            self._plot_metrics_summary(enhanced_metrics, self.test_ax5)
+            print(f"[ML_PANEL]   - Graph 5 (Metrics Summary) plotted")
+
+            print(f"[ML_PANEL]   - All graphs plotted, drawing canvas...")
 
             # Force redraw
+            self.test_fig.tight_layout()
             self.test_canvas.draw()
             self.test_canvas.flush_events()
 
@@ -1321,6 +1373,144 @@ class MLPanel:
             print(f"[ML_PANEL] [X] Error displaying test results: {e}")
             import traceback
             traceback.print_exc()
+
+    def _plot_direction_accuracy_over_time(self, actuals, predictions, ax):
+        """Plot rolling direction accuracy with adaptive window size"""
+        try:
+            # Convert to numpy arrays if needed
+            if not isinstance(actuals, np.ndarray):
+                actuals = np.array(actuals)
+            if not isinstance(predictions, np.ndarray):
+                predictions = np.array(predictions)
+
+            # Adaptive window size (min 20, max 50, or 1/4 of data)
+            window_size = min(50, max(20, len(actuals) // 4))
+
+            if len(actuals) < window_size * 2:
+                ax.text(0.5, 0.5, 'Insufficient data for rolling analysis\n(need at least 40 samples)',
+                        ha='center', va='center', color=get_color('text_primary'),
+                        transform=ax.transAxes)
+                ax.set_title('Rolling Direction Accuracy', color=get_color('text_primary'))
+                return
+
+            rolling_accuracy = []
+            for i in range(len(actuals) - window_size):
+                window_pred = predictions[i:i+window_size]
+                window_actual = actuals[i:i+window_size]
+                acc = safe_direction_accuracy(window_pred, window_actual)
+                rolling_accuracy.append(acc)
+
+            ax.plot(rolling_accuracy, color='#4fc3f7', linewidth=2, label='Rolling Accuracy')
+            ax.axhline(y=50, color='#9e9e9e', linestyle='--', alpha=0.5, label='Random (50%)')
+            ax.set_xlabel('Window Start Index', color=get_color('text_primary'))
+            ax.set_ylabel('Direction Accuracy (%)', color=get_color('text_primary'))
+            ax.set_title(f'Rolling Direction Accuracy ({window_size}-sample window)',
+                         color=get_color('text_primary'))
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error: {str(e)}', ha='center', va='center',
+                    color=get_color('text_primary'), transform=ax.transAxes)
+
+    def _plot_error_distribution(self, actuals, predictions, ax):
+        """Plot histogram of prediction errors"""
+        try:
+            # Convert to numpy arrays if needed
+            if not isinstance(actuals, np.ndarray):
+                actuals = np.array(actuals)
+            if not isinstance(predictions, np.ndarray):
+                predictions = np.array(predictions)
+
+            errors = predictions - actuals
+            ax.hist(errors, bins=50, color='#4fc3f7', alpha=0.7, edgecolor='black')
+            ax.axvline(x=0, color='#c62828', linestyle='--', linewidth=2, label='Zero Error')
+            ax.axvline(x=np.mean(errors), color='#ff9800', linestyle='--',
+                       linewidth=2, label=f'Mean: ${np.mean(errors):.2f}')
+            ax.set_xlabel('Prediction Error ($)', color=get_color('text_primary'))
+            ax.set_ylabel('Frequency', color=get_color('text_primary'))
+            ax.set_title('Distribution of Prediction Errors', color=get_color('text_primary'))
+            ax.legend()
+            ax.grid(True, alpha=0.3, axis='y')
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error: {str(e)}', ha='center', va='center',
+                    color=get_color('text_primary'), transform=ax.transAxes)
+
+    def _plot_direction_confusion_matrix(self, actuals, predictions, ax):
+        """Plot 2x2 confusion matrix for direction predictions"""
+        try:
+            # Convert to numpy arrays if needed
+            if not isinstance(actuals, np.ndarray):
+                actuals = np.array(actuals)
+            if not isinstance(predictions, np.ndarray):
+                predictions = np.array(predictions)
+
+            if len(actuals) < 2:
+                ax.text(0.5, 0.5, 'Insufficient data\n(need at least 2 samples)',
+                        ha='center', va='center', color=get_color('text_primary'),
+                        transform=ax.transAxes)
+                ax.set_title('Direction Confusion Matrix', color=get_color('text_primary'))
+                return
+
+            actual_dir = np.diff(actuals) > 0
+            pred_dir = np.diff(predictions) > 0
+
+            # Build confusion matrix manually
+            tp = np.sum((actual_dir == True) & (pred_dir == True))
+            tn = np.sum((actual_dir == False) & (pred_dir == False))
+            fp = np.sum((actual_dir == False) & (pred_dir == True))
+            fn = np.sum((actual_dir == True) & (pred_dir == False))
+
+            cm = np.array([[tn, fp], [fn, tp]])
+
+            # Plot heatmap
+            im = ax.imshow(cm, cmap='Blues', aspect='auto')
+            ax.set_xticks([0, 1])
+            ax.set_yticks([0, 1])
+            ax.set_xticklabels(['Down', 'Up'], color=get_color('text_primary'))
+            ax.set_yticklabels(['Down', 'Up'], color=get_color('text_primary'))
+            ax.set_xlabel('Predicted Direction', color=get_color('text_primary'))
+            ax.set_ylabel('Actual Direction', color=get_color('text_primary'))
+            ax.set_title('Direction Confusion Matrix', color=get_color('text_primary'))
+
+            # Add text annotations
+            for i in range(2):
+                for j in range(2):
+                    text_color = "white" if cm[i, j] > cm.max()/2 else "black"
+                    ax.text(j, i, f'{cm[i, j]}\n({cm[i, j]/cm.sum()*100:.1f}%)',
+                            ha="center", va="center", color=text_color, fontsize=12, fontweight='bold')
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error: {str(e)}', ha='center', va='center',
+                    color=get_color('text_primary'), transform=ax.transAxes)
+
+    def _plot_metrics_summary(self, metrics, ax):
+        """Display key metrics as formatted text"""
+        try:
+            ax.axis('off')
+
+            metrics_text = f"""
+KEY METRICS
+{'='*40}
+
+Price Accuracy:
+  MAE:  ${metrics.get('mae', 0):.2f}
+  RMSE: ${metrics.get('rmse', 0):.2f}
+
+Direction Accuracy:
+  Overall: {metrics.get('directional_accuracy', 0):.1f}%
+
+Test Set:
+  Samples: {metrics.get('test_samples', len(metrics.get('actuals', [])))}
+
+Model Performance:
+  {'✓ Good' if metrics.get('directional_accuracy', 0) > 55 else '✗ Poor'} Direction Prediction
+  {'✓ Good' if metrics.get('mae', float('inf')) < 100 else '✗ Poor'} Price Accuracy
+"""
+
+            ax.text(0.1, 0.5, metrics_text, fontsize=11, family='monospace',
+                    verticalalignment='center', color=get_color('text_primary'))
+        except Exception as e:
+            ax.text(0.5, 0.5, f'Error: {str(e)}', ha='center', va='center',
+                    color=get_color('text_primary'), transform=ax.transAxes)
 
     def update_progress(self, epoch: int, max_epochs: int, train_loss: float, val_loss: float):
         """Update training progress"""
