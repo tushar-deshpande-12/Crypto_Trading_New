@@ -1,0 +1,24 @@
+{
+  "symbol": "SOLUSDT",
+  "candle_count": 47528,
+  "interval": "1h",
+  "fetch_timestamp": "2026-01-13T14:38:40.369456",
+  "date_range": {
+    "start": "2020-08-11T11:30:00",
+    "end": "2026-01-13T14:30:00",
+    "start_timestamp": 1597125600000,
+    "end_timestamp": 1768294800000
+  },
+  "data_points": 47528,
+  "files": [
+    "metadata.json",
+    "data.csv",
+    "data.json"
+  ],
+  "user_metadata": {
+    "interval": "1h",
+    "max_candles_requested": 50000,
+    "actual_candles_fetched": 47528,
+    "fetch_method": "max_historical"
+  }
+}

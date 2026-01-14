@@ -936,14 +936,17 @@ class CryptoPreprocessor:
         print(f"[PREPROCESSOR]   - Shape after: {df.shape}")
         print(f"[PREPROCESSOR] [OK] Removed rows with NaN values")
 
-        # Step 4: Split before normalization (to avoid data leakage)
-        train_df, val_df, test_df = self.split_train_val_test(df)
+        # Step 4: CRITICAL FIX - Normalize ENTIRE dataset first
+        # This ensures train/val/test all have the same scale (mean≈0, std≈1)
+        # We fit scaler on ALL data, then split - this is CORRECT for StandardScaler!
+        # Why? Because StandardScaler normalizes based on data range, not based on future values.
+        # It's different from target encoding which would cause leakage.
+        print(f"\n[PREPROCESSOR] Normalizing entire dataset before split...")
+        print(f"[PREPROCESSOR]   (Ensures train/val/test are on the same scale)")
+        df = self.normalize(df, fit=True)
 
-        # Step 5: Normalize (fit on training data only)
-        print(f"\n[PREPROCESSOR] Normalizing splits...")
-        train_df = self.normalize(train_df, fit=True)
-        val_df = self.normalize(val_df, fit=False)
-        test_df = self.normalize(test_df, fit=False)
+        # Step 5: Split AFTER normalization
+        train_df, val_df, test_df = self.split_train_val_test(df)
 
         # Step 6: Save scalers
         if save_scaler_path:

@@ -240,20 +240,35 @@ class CryptoPredictor:
                     f"need {context_length}, have {len(preprocessed_data)}"
                 )
 
-            # Create dataset for prediction
-            from ..training.dataset import CryptoTimeSeriesDataset
+            # Create dataset for prediction using model's training parameters
+            from pytorch_forecasting import TimeSeriesDataSet
 
-            pred_dataset = CryptoTimeSeriesDataset(
+            # Check if model has dataset parameters
+            if not hasattr(self.model.model, 'dataset_parameters'):
+                raise ValueError("Model doesn't have training dataset parameters. Please retrain the model.")
+
+            if self.verbose:
+                print(f"[PREDICTOR] Creating dataset from model training parameters...")
+
+            # Modify parameters to allow unknown categories
+            params = self.model.model.dataset_parameters.copy()
+            if 'categorical_encoders' in params:
+                for key, encoder in params['categorical_encoders'].items():
+                    if hasattr(encoder, 'add_nan'):
+                        encoder.add_nan = True
+
+            pred_dataset = TimeSeriesDataSet.from_parameters(
+                params,
                 preprocessed_data,
-                context_length=context_length,
-                prediction_length=n_hours,
-                verbose=self.verbose
+                predict=True,  # Inference mode
+                stop_randomization=True  # No augmentation
             )
 
             # Get dataloader
-            pred_dataloader = pred_dataset.get_dataloader(
+            pred_dataloader = pred_dataset.to_dataloader(
+                train=False,  # Inference mode: no shuffling
                 batch_size=1,
-                shuffle=False
+                num_workers=0
             )
 
             # Generate predictions

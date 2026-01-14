@@ -219,7 +219,7 @@ class CryptoTimeSeriesDataset:
                 static_categoricals=self.static_categoricals,
                 # NO target_normalizer - data is already normalized by StandardScaler!
                 add_relative_time_idx=True,
-                add_target_scales=True,
+                add_target_scales=False,  # CRITICAL FIX: Don't add scales when using StandardScaler
                 add_encoder_length=True,
             )
 

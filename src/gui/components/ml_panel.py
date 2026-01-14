@@ -33,7 +33,8 @@ class MLPanel:
         self,
         parent: tk.Frame,
         on_train_start: Optional[Callable] = None,
-        on_predict_click: Optional[Callable] = None
+        on_predict_click: Optional[Callable] = None,
+        on_model_test_click: Optional[Callable] = None
     ):
         """
         Initialize ML Panel
@@ -42,12 +43,14 @@ class MLPanel:
             parent: Parent frame
             on_train_start: Callback when training starts(config, symbols)
             on_predict_click: Callback when prediction requested(model_path, symbol)
+            on_model_test_click: Callback when model test requested(model_path, symbol)
         """
         print(f"\n[ML_PANEL] Initializing ML Panel...")
 
         self.parent = parent
         self.on_train_start = on_train_start
         self.on_predict_click = on_predict_click
+        self.on_model_test_click = on_model_test_click
 
         # State
         self.selected_symbols = []
@@ -106,6 +109,9 @@ class MLPanel:
 
         # Section 4: Prediction
         self._create_prediction_section(scrollable_frame)
+
+        # Section 5: Model Testing
+        self._create_model_testing_section(scrollable_frame)
 
         print(f"[ML_PANEL] [OK] UI sections created")
 
@@ -444,6 +450,130 @@ class MLPanel:
             pady=5
         ).pack(side=tk.LEFT, padx=5)
 
+        # Model Architecture Selection
+        arch_frame = tk.Frame(section, bg=get_color('bg_medium'))
+        arch_frame.pack(fill=tk.X, pady=(15, 0))
+
+        tk.Label(
+            arch_frame,
+            text="Model Architecture:",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL, 'bold')
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.model_architecture = tk.StringVar(value="lstm")
+
+        tk.Radiobutton(
+            arch_frame,
+            text="LSTM (Simple - Recommended)",
+            variable=self.model_architecture,
+            value="lstm",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            selectcolor=get_color('bg_light'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL)
+        ).pack(side=tk.LEFT, padx=(0, 15))
+
+        tk.Radiobutton(
+            arch_frame,
+            text="TFT (Advanced - Transformer)",
+            variable=self.model_architecture,
+            value="tft",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            selectcolor=get_color('bg_light'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL)
+        ).pack(side=tk.LEFT)
+
+        # Architecture info
+        arch_info = tk.Label(
+            section,
+            text="LSTM: Faster training (10-20 epochs), proven architecture, easier convergence\n"
+                 "TFT: More complex (50+ epochs), attention mechanism, potentially higher accuracy",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_secondary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL - 1),
+            wraplength=600,
+            justify=tk.LEFT
+        )
+        arch_info.pack(anchor=tk.W, pady=(5, 0))
+
+        # Training Mode Selection
+        mode_frame = tk.Frame(section, bg=get_color('bg_medium'))
+        mode_frame.pack(fill=tk.X, pady=(10, 0))
+
+        tk.Label(
+            mode_frame,
+            text="Training Mode:",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL, 'bold')
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.training_mode = tk.StringVar(value="scratch")
+
+        tk.Radiobutton(
+            mode_frame,
+            text="From Scratch",
+            variable=self.training_mode,
+            value="scratch",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            selectcolor=get_color('bg_light'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL),
+            command=self._update_training_mode_ui
+        ).pack(side=tk.LEFT, padx=(0, 15))
+
+        tk.Radiobutton(
+            mode_frame,
+            text="Fine-tune Pre-trained",
+            variable=self.training_mode,
+            value="finetune",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            selectcolor=get_color('bg_light'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL),
+            command=self._update_training_mode_ui
+        ).pack(side=tk.LEFT)
+
+        # Pre-trained model path (for fine-tuning)
+        self.pretrained_frame = tk.Frame(section, bg=get_color('bg_medium'))
+        self.pretrained_frame.pack(fill=tk.X, pady=(8, 0))
+
+        tk.Label(
+            self.pretrained_frame,
+            text="Pre-trained Model:",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_secondary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL)
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        self.pretrained_path_var = tk.StringVar(value="models/checkpoints/best_model.ckpt")
+        pretrained_entry = tk.Entry(
+            self.pretrained_frame,
+            textvariable=self.pretrained_path_var,
+            bg=get_color('bg_light'),
+            fg=get_color('text_primary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL),
+            width=35
+        )
+        pretrained_entry.pack(side=tk.LEFT, padx=(0, 5))
+
+        tk.Button(
+            self.pretrained_frame,
+            text="Browse",
+            command=self._browse_pretrained_model,
+            bg=get_color('bg_light'),
+            fg=get_color('text_primary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL),
+            padx=10,
+            pady=2
+        ).pack(side=tk.LEFT)
+
+        # Initially hide pretrained options
+        self.pretrained_frame.pack_forget()
+
         # Action buttons
         action_frame = tk.Frame(section, bg=get_color('bg_medium'))
         action_frame.pack(fill=tk.X, pady=(10, 0))
@@ -660,6 +790,31 @@ class MLPanel:
         )
         self.prediction_label.pack(pady=10)
 
+        # TRADING SIGNALS SECTION
+        signals_frame = tk.Frame(section, bg=get_color('bg_light'))
+        signals_frame.pack(fill=tk.X, pady=10, padx=20)
+
+        # Signal display (large, prominent)
+        self.signal_label = tk.Label(
+            signals_frame,
+            text="⚪ HOLD - Awaiting prediction",
+            bg=get_color('bg_light'),
+            fg=get_color('text_secondary'),
+            font=(AppConfig.FONT_FAMILY, 16, 'bold')
+        )
+        self.signal_label.pack(pady=10)
+
+        # Risk management levels
+        self.risk_levels_label = tk.Label(
+            signals_frame,
+            text="",
+            bg=get_color('bg_light'),
+            fg=get_color('text_primary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL),
+            justify=tk.LEFT
+        )
+        self.risk_levels_label.pack(pady=5)
+
         # PREDICTION GRAPH
         graph_frame = tk.Frame(section, bg=get_color('bg_medium'))
         graph_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
@@ -680,6 +835,108 @@ class MLPanel:
         self.prediction_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         print(f"[ML_PANEL]   - Prediction graph created")
+
+    def _create_model_testing_section(self, parent):
+        """Create model testing section"""
+        print(f"[ML_PANEL]   - Creating model testing section...")
+
+        section = tk.LabelFrame(
+            parent,
+            text=" 📊 Model Testing & Validation ",
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_LARGE, 'bold'),
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            padx=20,
+            pady=15,
+            borderwidth=0,
+            relief='flat'
+        )
+        section.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 15))
+
+        # Test controls
+        controls_frame = tk.Frame(section, bg=get_color('bg_medium'))
+        controls_frame.pack(fill=tk.X, pady=5)
+
+        tk.Label(
+            controls_frame,
+            text="Test on historical data:",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL)
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Button(
+            controls_frame,
+            text="📈 Run Model Test",
+            command=self._run_model_test,
+            bg=get_color('warning'),
+            fg='white',
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL, 'bold'),
+            padx=24,
+            pady=10,
+            relief=tk.FLAT,
+            borderwidth=0,
+            cursor="hand2"
+        ).pack(side=tk.LEFT, padx=5)
+
+        # Metrics display
+        metrics_frame = tk.Frame(section, bg=get_color('bg_light'))
+        metrics_frame.pack(fill=tk.X, pady=10, padx=20)
+
+        # Create metrics labels
+        self.test_metrics_labels = {}
+
+        metrics_grid = tk.Frame(metrics_frame, bg=get_color('bg_light'))
+        metrics_grid.pack(pady=10, padx=10)
+
+        metric_names = [
+            ("MAE", "Mean Absolute Error"),
+            ("RMSE", "Root Mean Squared Error"),
+            ("Dir Acc", "Directional Accuracy"),
+            ("Test Loss", "Test Set Loss")
+        ]
+
+        for i, (short_name, full_name) in enumerate(metric_names):
+            # Label
+            tk.Label(
+                metrics_grid,
+                text=f"{short_name}:",
+                bg=get_color('bg_light'),
+                fg=get_color('text_primary'),
+                font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL, 'bold')
+            ).grid(row=i, column=0, sticky='e', padx=(10, 5), pady=2)
+
+            # Value
+            value_label = tk.Label(
+                metrics_grid,
+                text="--",
+                bg=get_color('bg_light'),
+                fg=get_color('text_secondary'),
+                font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL)
+            )
+            value_label.grid(row=i, column=1, sticky='w', padx=(5, 20), pady=2)
+            self.test_metrics_labels[short_name] = value_label
+
+        # Test results graph
+        graph_frame = tk.Frame(section, bg=get_color('bg_medium'))
+        graph_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        # Create matplotlib figure for test results
+        self.test_fig = Figure(figsize=(10, 5), facecolor=get_color('bg_medium'))
+        self.test_ax = self.test_fig.add_subplot(111)
+        self.test_ax.set_facecolor(get_color('bg_light'))
+        self.test_ax.set_title('Actual vs Predicted (Test Set)', color=get_color('text_primary'))
+        self.test_ax.set_xlabel('Sample Index', color=get_color('text_primary'))
+        self.test_ax.set_ylabel('Price (Normalized)', color=get_color('text_primary'))
+        self.test_ax.tick_params(colors=get_color('text_primary'))
+        self.test_ax.grid(True, alpha=0.3)
+
+        # Embed in tkinter
+        self.test_canvas = FigureCanvasTkAgg(self.test_fig, graph_frame)
+        self.test_canvas.draw()
+        self.test_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        print(f"[ML_PANEL]   - Model testing section created")
 
     def _scan_datasets(self):
         """Scan dataset directory for available datasets"""
@@ -904,12 +1161,38 @@ class MLPanel:
             # GPU configuration
             config['use_gpu'] = self.use_gpu_var.get() if self.gpu_available else False
             config['gpu_count'] = self.gpu_count_var.get() if config['use_gpu'] else 0
+
+            # Model architecture
+            config['model_architecture'] = self.model_architecture.get()
+
+            # Training mode
+            config['training_mode'] = self.training_mode.get()
+            config['pretrained_path'] = self.pretrained_path_var.get() if self.training_mode.get() == 'finetune' else None
         except ValueError as e:
             print(f"[ML_PANEL] [X] Invalid config value: {e}")
             messagebox.showerror("Invalid Configuration", f"Please check configuration values: {e}")
             return {}
 
         return config
+
+    def _update_training_mode_ui(self):
+        """Show/hide pre-trained model options based on training mode"""
+        if self.training_mode.get() == "finetune":
+            self.pretrained_frame.pack(fill=tk.X, pady=(8, 0))
+        else:
+            self.pretrained_frame.pack_forget()
+
+    def _browse_pretrained_model(self):
+        """Browse for pre-trained model checkpoint"""
+        filepath = filedialog.askopenfilename(
+            title="Select Pre-trained Model Checkpoint",
+            filetypes=[("Checkpoint files", "*.ckpt"), ("All files", "*.*")],
+            initialdir="models/checkpoints"
+        )
+
+        if filepath:
+            self.pretrained_path_var.set(filepath)
+            self.log_message(f"[PRETRAINED] Selected model: {Path(filepath).name}")
 
     def _browse_model(self):
         """Browse for model checkpoint"""
@@ -943,6 +1226,101 @@ class MLPanel:
         # Call callback
         if self.on_predict_click:
             self.on_predict_click(model_path, symbol)
+
+    def _run_model_test(self):
+        """Run model test on historical data"""
+        model_path = self.model_path_var.get()
+
+        if model_path == "No model loaded":
+            messagebox.showwarning("No Model", "Please load a trained model first.")
+            return
+
+        symbol = self.predict_symbol_var.get()
+
+        if not symbol:
+            messagebox.showwarning("No Symbol", "Please select a cryptocurrency symbol for testing.")
+            return
+
+        print(f"[ML_PANEL] Running model test on {symbol}...")
+
+        # Update UI
+        for label in self.test_metrics_labels.values():
+            label.config(text="Testing...")
+
+        # Call callback
+        if self.on_model_test_click:
+            self.on_model_test_click(model_path, symbol)
+
+    def display_test_results(self, metrics: dict, actuals: list, predictions: list):
+        """Display model test results"""
+        try:
+            print(f"[ML_PANEL] Displaying test results...")
+            print(f"[ML_PANEL]   - Actuals length: {len(actuals)}")
+            print(f"[ML_PANEL]   - Predictions length: {len(predictions)}")
+            print(f"[ML_PANEL]   - Metrics: {metrics}")
+
+            # Validate data
+            if not actuals or not predictions:
+                print(f"[ML_PANEL]   [!] Empty data - cannot plot")
+                return
+
+            if len(actuals) != len(predictions):
+                print(f"[ML_PANEL]   [!] Length mismatch - actuals: {len(actuals)}, predictions: {len(predictions)}")
+
+            # Check for sample values
+            print(f"[ML_PANEL]   - First 3 actuals: {actuals[:3]}")
+            print(f"[ML_PANEL]   - First 3 predictions: {predictions[:3]}")
+
+            # Update metrics
+            self.test_metrics_labels["MAE"].config(text=f"${metrics.get('mae', 0):.2f}")
+            self.test_metrics_labels["RMSE"].config(text=f"${metrics.get('rmse', 0):.2f}")
+            self.test_metrics_labels["Dir Acc"].config(text=f"{metrics.get('directional_accuracy', 0):.1f}%")
+            self.test_metrics_labels["Test Loss"].config(text=f"{metrics.get('test_loss', 0):.4f}")
+
+            print(f"[ML_PANEL]   - Metrics labels updated")
+
+            # Update graph
+            self.test_ax.clear()
+            self.test_ax.set_facecolor(get_color('bg_light'))
+            self.test_ax.set_xlabel('Sample Index', color=get_color('text_primary'))
+            self.test_ax.set_ylabel('Price ($)', color=get_color('text_primary'))
+            self.test_ax.set_title('Actual vs Predicted (Test Set)', color=get_color('text_primary'))
+            self.test_ax.tick_params(colors=get_color('text_primary'))
+            self.test_ax.grid(True, alpha=0.3)
+
+            print(f"[ML_PANEL]   - Graph cleared and configured")
+
+            # Plot data (limit to last 100 samples for clarity)
+            plot_actuals = actuals
+            plot_predictions = predictions
+
+            if len(actuals) > 100:
+                plot_actuals = actuals[-100:]
+                plot_predictions = predictions[-100:]
+
+            sample_indices = list(range(len(plot_actuals)))
+            print(f"[ML_PANEL]   - Plotting {len(sample_indices)} samples...")
+            print(f"[ML_PANEL]   - Y-axis range: actuals [{min(plot_actuals):.2f}, {max(plot_actuals):.2f}], predictions [{min(plot_predictions):.2f}, {max(plot_predictions):.2f}]")
+
+            # Plot with explicit parameters
+            line1 = self.test_ax.plot(sample_indices, plot_actuals, label='Actual', color='#4fc3f7', linewidth=2, alpha=0.8)
+            line2 = self.test_ax.plot(sample_indices, plot_predictions, label='Predicted', color='#ff9800', linewidth=2, alpha=0.8, linestyle='--')
+
+            print(f"[ML_PANEL]   - Plot objects created: {line1}, {line2}")
+
+            self.test_ax.legend()
+
+            print(f"[ML_PANEL]   - Data plotted, drawing canvas...")
+
+            # Force redraw
+            self.test_canvas.draw()
+            self.test_canvas.flush_events()
+
+            print(f"[ML_PANEL] [OK] Test results displayed")
+        except Exception as e:
+            print(f"[ML_PANEL] [X] Error displaying test results: {e}")
+            import traceback
+            traceback.print_exc()
 
     def update_progress(self, epoch: int, max_epochs: int, train_loss: float, val_loss: float):
         """Update training progress"""
@@ -1023,8 +1401,17 @@ class MLPanel:
         except Exception as e:
             print(f"[ML_PANEL] Failed to refresh GPU status: {e}")
 
-    def display_prediction(self, predictions: Dict[str, Any], symbol: str, scaler=None, feature_columns=None, current_price=None):
-        """Display prediction results with graph"""
+    def display_prediction(self, predictions: Dict[str, Any], symbol: str, scaler=None, feature_columns=None, current_price=None, historical_prices=None):
+        """Display prediction results with graph
+
+        Args:
+            predictions: Prediction dictionary
+            symbol: Symbol name
+            scaler: Data scaler for denormalization
+            feature_columns: Feature column names
+            current_price: Current market price
+            historical_prices: List of historical prices (1 week before prediction)
+        """
         print(f"[ML_PANEL] Displaying prediction for {symbol}...")
 
         if current_price:
@@ -1120,28 +1507,118 @@ class MLPanel:
             self.prediction_label.config(text=summary, fg=get_color('accent'))
             self.log_message(f"[PREDICTION] {summary}")
 
-            # Update graph with current price + predictions
-            self._update_prediction_chart(pred_denorm_with_current, symbol, current_price)
+            # CALCULATE TRADING SIGNAL
+            self._update_trading_signal(current_val, future_val, price_change)
+
+            # CALCULATE RISK MANAGEMENT LEVELS
+            self._update_risk_levels(current_val, future_val)
+
+            # Update graph with historical data, current price, and predictions
+            self._update_prediction_chart(pred_denorm_with_current, symbol, current_price, historical_prices)
         else:
             self.prediction_label.config(text=f"Prediction for {symbol}: ${pred_denorm_with_current[0]:.2f}")
 
-    def _update_prediction_chart(self, predictions, symbol, current_price=None):
-        """Update prediction chart"""
+    def _update_trading_signal(self, current_price: float, predicted_price: float, price_change_pct: float):
+        """Calculate and display trading signal based on prediction"""
+        try:
+            # Determine signal based on expected price change
+            if price_change_pct >= 2.0:
+                signal_text = "🟢 STRONG BUY"
+                signal_color = "#4caf50"
+                recommendation = "High confidence upward trend"
+            elif price_change_pct >= 0.5:
+                signal_text = "🟢 BUY"
+                signal_color = "#81c784"
+                recommendation = "Moderate upward trend"
+            elif price_change_pct <= -2.0:
+                signal_text = "🔴 STRONG SELL"
+                signal_color = "#f44336"
+                recommendation = "High confidence downward trend"
+            elif price_change_pct <= -0.5:
+                signal_text = "🔴 SELL"
+                signal_color = "#e57373"
+                recommendation = "Moderate downward trend"
+            else:
+                signal_text = "⚪ HOLD"
+                signal_color = "#9e9e9e"
+                recommendation = "Low movement expected"
+
+            # Update signal display
+            self.signal_label.config(
+                text=f"{signal_text} - Expected: {price_change_pct:+.1f}%",
+                fg=signal_color
+            )
+
+            print(f"[ML_PANEL]   - Trading signal: {signal_text} ({price_change_pct:+.1f}%)")
+
+        except Exception as e:
+            print(f"[ML_PANEL]   - Failed to update trading signal: {e}")
+
+    def _update_risk_levels(self, current_price: float, predicted_price: float):
+        """Calculate and display risk management levels"""
+        try:
+            # Conservative strategy: -2% stop loss, take 95% of predicted gain
+            stop_loss_conservative = current_price * 0.98
+            if predicted_price > current_price:
+                # For long positions (price going up)
+                take_profit_conservative = current_price + (predicted_price - current_price) * 0.95
+                position_type = "LONG"
+            else:
+                # For short positions (price going down)
+                take_profit_conservative = current_price - (current_price - predicted_price) * 0.95
+                position_type = "SHORT"
+
+            # Calculate risk/reward ratio
+            risk_amount = abs(current_price - stop_loss_conservative)
+            reward_amount = abs(take_profit_conservative - current_price)
+            risk_reward = reward_amount / risk_amount if risk_amount > 0 else 0
+
+            # Calculate percentages
+            stop_loss_pct = ((stop_loss_conservative - current_price) / current_price * 100)
+            take_profit_pct = ((take_profit_conservative - current_price) / current_price * 100)
+
+            # Format text
+            levels_text = (
+                f"💰 Risk Management ({position_type} Position):\n"
+                f"   Stop-Loss:    ${stop_loss_conservative:,.2f} ({stop_loss_pct:.1f}%)\n"
+                f"   Take-Profit:  ${take_profit_conservative:,.2f} ({take_profit_pct:+.1f}%)\n"
+                f"   Risk/Reward: 1:{risk_reward:.2f}"
+            )
+
+            self.risk_levels_label.config(text=levels_text)
+
+            print(f"[ML_PANEL]   - Risk management: Stop ${stop_loss_conservative:.2f}, Target ${take_profit_conservative:.2f}, R/R 1:{risk_reward:.2f}")
+
+        except Exception as e:
+            print(f"[ML_PANEL]   - Failed to update risk levels: {e}")
+
+    def _update_prediction_chart(self, predictions, symbol, current_price=None, historical_prices=None):
+        """Update prediction chart with 1 week history + 10h forecast"""
         try:
             self.prediction_ax.clear()
             self.prediction_ax.set_facecolor(get_color('bg_light'))
-            self.prediction_ax.set_title(f'10-Hour Price Prediction: {symbol}', color=get_color('text_primary'), fontsize=12, fontweight='bold')
-            self.prediction_ax.set_xlabel('Hours from Now', color=get_color('text_primary'))
+            self.prediction_ax.set_title(f'Price History (1 Week) + 10-Hour Forecast: {symbol}',
+                                        color=get_color('text_primary'), fontsize=12, fontweight='bold')
+            self.prediction_ax.set_xlabel('Time', color=get_color('text_primary'))
             self.prediction_ax.set_ylabel('Price (USD)', color=get_color('text_primary'))
             self.prediction_ax.tick_params(colors=get_color('text_primary'))
             self.prediction_ax.grid(True, alpha=0.3)
 
-            # Hours array: 0 (now), 1, 2, 3, ..., 10
-            hours = list(range(len(predictions)))
+            # If we have historical data, show it
+            if historical_prices and len(historical_prices) > 0:
+                # Historical hours: negative hours going back in time
+                hist_hours = list(range(-len(historical_prices), 0))
+
+                # Plot historical data
+                self.prediction_ax.plot(hist_hours, historical_prices,
+                                       linewidth=2, color='#9e9e9e', alpha=0.7, label='Historical (1 Week)')
+
+            # Hours array for predictions: 0 (now), 1, 2, 3, ..., 10
+            pred_hours = list(range(len(predictions)))
 
             # Plot prediction line
-            self.prediction_ax.plot(hours, predictions, marker='o', linewidth=2.5, markersize=6,
-                                   color='#4fc3f7', label='Price Forecast')
+            self.prediction_ax.plot(pred_hours, predictions, marker='o', linewidth=2.5, markersize=6,
+                                   color='#4fc3f7', label='Price Forecast', zorder=3)
 
             # Add start marker (current price - hour 0)
             self.prediction_ax.scatter([0], [predictions[0]], s=150, c='#4caf50', marker='o',
@@ -1151,10 +1628,13 @@ class MLPanel:
             self.prediction_ax.scatter([len(predictions)-1], [predictions[-1]], s=150, c='#ff9800', marker='s',
                                       label='+10 Hours', zorder=5, edgecolors='white', linewidths=2)
 
-            # Add value labels with better positioning
+            # Add vertical line at "NOW" to separate history from forecast
+            self.prediction_ax.axvline(x=0, color='#4caf50', linestyle='--', alpha=0.5, linewidth=2, label='Current Time')
+
+            # Add value labels
             # Current price label
             self.prediction_ax.text(0, predictions[0], f'${predictions[0]:,.2f}\n(NOW)',
-                                   ha='center', va='bottom', color='#4caf50', fontweight='bold', fontsize=9)
+                                   ha='left', va='bottom', color='#4caf50', fontweight='bold', fontsize=9)
 
             # 10-hour prediction label
             price_change_pct = ((predictions[-1] - predictions[0]) / predictions[0] * 100) if predictions[0] != 0 else 0
@@ -1163,14 +1643,15 @@ class MLPanel:
                                    ha='center', va='bottom', color='#ff9800', fontweight='bold', fontsize=9)
 
             # Add horizontal line at current price for reference
-            self.prediction_ax.axhline(y=predictions[0], color='#4caf50', linestyle='--', alpha=0.3, linewidth=1)
+            self.prediction_ax.axhline(y=predictions[0], color='#4caf50', linestyle=':', alpha=0.3, linewidth=1)
 
-            self.prediction_ax.legend(loc='best', fontsize=9)
+            self.prediction_ax.legend(loc='best', fontsize=8)
             self.prediction_fig.tight_layout()
             self.prediction_canvas.draw()
 
+            hist_len = len(historical_prices) if historical_prices else 0
             print(f"[ML_PANEL]   - Prediction chart updated successfully")
-            print(f"[ML_PANEL]   - Chart shows hours 0 (NOW) through 10 (+10h)")
+            print(f"[ML_PANEL]   - Chart shows {hist_len} hours of history + current + 10h forecast")
 
         except Exception as e:
             print(f"[ML_PANEL]   - Failed to update prediction chart: {e}")

@@ -1,0 +1,10 @@
+[LSTM] Training complete!
+[LSTM]   - Best model: C:\crypto\ver6\models\checkpoints\lstm\lstm-epoch=06-val_loss=0.0183.ckpt
+[LSTM] Model saved to models/checkpoints/lstm/best_model.pt
+ERROR:src.gui.app:Training error: cannot access local variable 'tft_config' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\crypto\ver6\src\gui\app.py", line 529, in training_thread
+    context_length=tft_config.max_encoder_length,
+                   ^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'tft_config' where it is not associated with a value
+[ML_PANEL] Training complete: False

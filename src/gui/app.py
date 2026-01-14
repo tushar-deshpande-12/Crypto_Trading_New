@@ -9,6 +9,7 @@ import threading
 import logging
 import warnings
 from typing import Optional
+from pathlib import Path
 
 from src.core.config import AppConfig
 from src.gui.styles import setup_styles, get_color
@@ -163,7 +164,18 @@ class CryptoAIPredictorApp:
         self.ml_panel = MLPanel(
             ml_tab,
             on_train_start=self._on_train_start,
-            on_predict_click=self._on_predict_click
+            on_predict_click=self._on_predict_click,
+            on_model_test_click=self._on_model_test_click
+        )
+
+        # Tab 4: Backtesting
+        backtest_tab = tk.Frame(self.notebook, bg=get_color('bg_dark'))
+        self.notebook.add(backtest_tab, text='  📊 Backtesting  ')
+
+        from src.gui.components.backtest_panel import BacktestPanel
+        self.backtest_panel = BacktestPanel(
+            backtest_tab,
+            on_run_backtest=self._on_run_backtest
         )
 
         # Status bar
@@ -410,16 +422,20 @@ class CryptoAIPredictorApp:
         except:
             pass  # Version check failed, proceed anyway
 
-        # Extract GPU configuration
+        # Extract configuration
         use_gpu = config.get('use_gpu', False)
         gpu_count = config.get('gpu_count', 0)
+        model_arch = config.get('model_architecture', 'lstm')
 
         self.ml_panel.log_message(f"[TRAINING] Starting training pipeline...")
+        self.ml_panel.log_message(f"[TRAINING] Model: {model_arch.upper()}")
         self.ml_panel.log_message(f"[TRAINING] Selected symbols: {', '.join(symbols)}")
         self.ml_panel.log_message(f"[TRAINING] Configuration: Batch={config.get('batch_size')}, Epochs={config.get('max_epochs')}")
-        self.ml_panel.log_message(f"[TRAINING] GPU: {'Enabled' if use_gpu else 'Disabled'} ({gpu_count} GPU(s))")
+        gpu_status = 'Enabled' if use_gpu else 'Disabled'
+        self.ml_panel.log_message(f"[TRAINING] GPU: {gpu_status} ({gpu_count} GPU(s))")
 
-        self._update_status(f"Training model with {len(symbols)} symbols on {'GPU' if use_gpu else 'CPU'}...")
+        device_name = 'GPU' if use_gpu else 'CPU'
+        self._update_status(f"Training model with {len(symbols)} symbols on {device_name}...")
 
         # Run training in background thread
         def training_thread():
@@ -441,15 +457,64 @@ class CryptoAIPredictorApp:
 
                 self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] OK Preprocessing complete (features, normalization, scaler saved)"))
 
-                # Add time index for TFT
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Adding time index..."))
-                train_df = preprocessor.add_time_index(train_df)
-                val_df = preprocessor.add_time_index(val_df)
-                test_df = preprocessor.add_time_index(test_df)
+                # Branch based on model architecture
+                if model_arch == 'lstm':
+                    # ========== LSTM TRAINING ==========
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Using Simple LSTM model"))
 
-                # Create TFT config
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Creating model configuration..."))
-                tft_config = TFTConfig(
+                    from src.ml.models.lstm_model import SimpleLSTMTrainer
+
+                    # Create LSTM trainer
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Creating LSTM trainer..."))
+                    lstm_trainer = SimpleLSTMTrainer(
+                        sequence_length=168,  # 1 week
+                        prediction_horizon=10,
+                        hidden_size=config.get('hidden_size', 128),
+                        num_layers=config.get('lstm_layers', 2),
+                        dropout=config.get('dropout', 0.2),
+                        learning_rate=config.get('learning_rate', 0.001),
+                        batch_size=config.get('batch_size', 64),
+                        max_epochs=config.get('max_epochs', 50),
+                        early_stopping_patience=20,
+                        checkpoint_dir="models/checkpoints/lstm",
+                        verbose=True,
+                        progress_callback=self.ml_panel.update_progress,
+                        root=self.root
+                    )
+
+                    # Create dataloaders
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Creating LSTM dataloaders..."))
+                    train_loader, val_loader, test_loader = lstm_trainer.create_dataloaders(
+                        train_df, val_df, test_df
+                    )
+
+                    # Train
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Starting LSTM training..."))
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] LR will auto-reduce after 3 stagnant epochs"))
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Displaying: MAE, RMSE, R2, Loss on train & val"))
+
+                    lstm_trainer.train(train_loader, val_loader, gpus=gpu_count)
+
+                    # Save model
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Saving LSTM model..."))
+                    lstm_trainer.save_model("models/checkpoints/lstm/best_model.pt")
+
+                    best_model_path = "models/checkpoints/lstm/best_model.pt"
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] Model saved to {best_model_path}"))
+
+                else:
+                    # ========== TFT TRAINING ==========
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Using TFT (Transformer) model"))
+
+                    # Add time index for TFT
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Adding time index..."))
+                    train_df = preprocessor.add_time_index(train_df)
+                    val_df = preprocessor.add_time_index(val_df)
+                    test_df = preprocessor.add_time_index(test_df)
+
+                    # Create TFT config
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Creating model configuration..."))
+                    tft_config = TFTConfig(
                     hidden_size=config.get('hidden_size', 160),
                     lstm_layers=config.get('lstm_layers', 2),
                     attention_head_size=config.get('attention_head_size', 4),
@@ -459,77 +524,85 @@ class CryptoAIPredictorApp:
                     max_epochs=config.get('max_epochs', 50),
                 )
 
-                # Create dataloaders
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Creating datasets and dataloaders..."))
-                train_loader, val_loader, test_loader = create_dataloaders(
-                    train_df, val_df, test_df,
-                    context_length=tft_config.max_encoder_length,
-                    prediction_length=tft_config.max_prediction_length,
-                    batch_size=tft_config.batch_size,
-                    verbose=True
-                )
-
-                # Create trainer with GUI progress callback
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Initializing trainer..."))
-                trainer = TFTTrainer(
-                    config=tft_config,
-                    checkpoint_dir="models/checkpoints",
-                    log_dir="logs/training",
-                    verbose=True,
-                    progress_callback=self.ml_panel.update_progress,
-                    root=self.root  # For thread-safe GUI updates
-                )
-
-                # Setup model
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Setting up model from dataset..."))
-                trainer.setup_model(train_loader.dataset)
-
-                # Setup PyTorch Lightning trainer
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Setting up PyTorch Lightning trainer..."))
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] Device: {'GPU' if use_gpu else 'CPU'} ({gpu_count} GPU(s))"))
-                trainer.setup_trainer(gpus=gpu_count, enable_progress_bar=True, verbose_callbacks=True)
-
-                # Train
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Starting training loop..."))
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] This may take a while. Please be patient..."))
-
-                trainer.train(train_loader, val_loader)
-
-                # Save best model
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Saving best model..."))
-                trainer.save_best_model("models/checkpoints/best_model.ckpt")
-
-                # Export metrics
-                self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Exporting metrics..."))
-                trainer.export_metrics("models/checkpoints")
-
-                # COMPREHENSIVE MODEL EVALUATION
-                self.root.after(0, lambda: self.ml_panel.log_message("[EVALUATION] Running comprehensive model evaluation..."))
-                try:
-                    from src.ml.training.model_evaluator import evaluate_trained_model
-
-                    # Evaluate on all splits
-                    eval_metrics = evaluate_trained_model(
-                        model=trainer.model_wrapper.model,
-                        train_loader=train_loader,
-                        val_loader=val_loader,
-                        test_loader=test_loader,
-                        save_dir="models/checkpoints/evaluation",
-                        device='cuda' if use_gpu and gpu_count > 0 else 'cpu'
+                    # Create dataloaders
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Creating datasets and dataloaders..."))
+                    train_loader, val_loader, test_loader = create_dataloaders(
+                        train_df, val_df, test_df,
+                        context_length=tft_config.max_encoder_length,
+                        prediction_length=tft_config.max_prediction_length,
+                        batch_size=tft_config.batch_size,
+                        verbose=True
                     )
 
-                    self.root.after(0, lambda: self.ml_panel.log_message("[EVALUATION] OK Evaluation complete!"))
-                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Train MAE: {eval_metrics['train']['mae']:.4f}"))
-                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Val MAE: {eval_metrics['val']['mae']:.4f}"))
-                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Test MAE: {eval_metrics['test']['mae']:.4f}"))
-                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Plots saved to: models/checkpoints/evaluation/"))
+                    # Create trainer with GUI progress callback
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Initializing trainer..."))
+                    trainer = TFTTrainer(
+                        config=tft_config,
+                        checkpoint_dir="models/checkpoints",
+                        log_dir="logs/training",
+                        verbose=True,
+                        progress_callback=self.ml_panel.update_progress,
+                        root=self.root  # For thread-safe GUI updates
+                    )
 
-                except Exception as e:
-                    self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION] Warning: {e}"))
-                    print(f"[APP] Evaluation error: {e}")
+                    # Setup model
+                    training_mode = config.get('training_mode', 'scratch')
+                    pretrained_path = config.get('pretrained_path', None)
 
-                # Complete
-                best_model_path = "models/checkpoints/best_model.ckpt"
+                    if training_mode == 'finetune' and pretrained_path:
+                        self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] Loading pretrained model for fine-tuning: {Path(pretrained_path).name}"))
+                        trainer.setup_model(train_loader.dataset, pretrained_path=pretrained_path)
+                    else:
+                        self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Setting up model from scratch..."))
+                        trainer.setup_model(train_loader.dataset)
+
+                    # Setup PyTorch Lightning trainer
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Setting up PyTorch Lightning trainer..."))
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] Device: {'GPU' if use_gpu else 'CPU'} ({gpu_count} GPU(s))"))
+                    trainer.setup_trainer(gpus=gpu_count, enable_progress_bar=True, verbose_callbacks=True)
+
+                    # Train
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Starting training loop..."))
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TRAINING] This may take a while. Please be patient..."))
+
+                    trainer.train(train_loader, val_loader)
+
+                    # Save best model
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Saving best model..."))
+                    trainer.save_best_model("models/checkpoints/best_model.ckpt")
+
+                    # Export metrics
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Exporting metrics..."))
+                    trainer.export_metrics("models/checkpoints")
+
+                    # COMPREHENSIVE MODEL EVALUATION
+                    self.root.after(0, lambda: self.ml_panel.log_message("[EVALUATION] Running comprehensive model evaluation..."))
+                    try:
+                        from src.ml.training.model_evaluator import evaluate_trained_model
+
+                        # Evaluate on all splits
+                        eval_metrics = evaluate_trained_model(
+                            model=trainer.model_wrapper.model,
+                            train_loader=train_loader,
+                            val_loader=val_loader,
+                            test_loader=test_loader,
+                            save_dir="models/checkpoints/evaluation",
+                            device='cuda' if use_gpu and gpu_count > 0 else 'cpu'
+                        )
+
+                        self.root.after(0, lambda: self.ml_panel.log_message("[EVALUATION] OK Evaluation complete!"))
+                        self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Train MAE: {eval_metrics['train']['mae']:.4f}"))
+                        self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Val MAE: {eval_metrics['val']['mae']:.4f}"))
+                        self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Test MAE: {eval_metrics['test']['mae']:.4f}"))
+                        self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION]   - Plots saved to: models/checkpoints/evaluation/"))
+
+                    except Exception as e:
+                        self.root.after(0, lambda: self.ml_panel.log_message(f"[EVALUATION] Warning: {e}"))
+                        print(f"[APP] Evaluation error: {e}")
+
+                    best_model_path = "models/checkpoints/best_model.ckpt"
+
+                # Complete (common for both LSTM and TFT)
                 self.root.after(0, lambda: self.ml_panel.training_complete(
                     True,
                     f"Training completed successfully! Model saved to {best_model_path}"
@@ -611,6 +684,16 @@ class CryptoAIPredictorApp:
                 current_price = float(live_df['close'].iloc[-1])
                 current_timestamp = live_df['datetime'].iloc[-1] if 'datetime' in live_df.columns else 'N/A'
 
+                # Extract 1 week (168 hours) of historical prices for visualization
+                historical_prices = None
+                try:
+                    if len(live_df) >= 168:
+                        historical_prices = live_df['close'].iloc[-168:].values.tolist()
+                    else:
+                        historical_prices = live_df['close'].values.tolist()
+                except Exception as e:
+                    print(f"[APP] Could not extract historical data: {e}")
+
                 self.root.after(0, lambda p=current_price: self.ml_panel.log_message(
                     f"[PREDICTION] OK Fetched {len(live_df)} candles. Current price: ${p:.2f}"
                 ))
@@ -657,35 +740,45 @@ class CryptoAIPredictorApp:
 
                 self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Creating prediction dataset..."))
 
-                # STEP 4: Create dataset from live data
-                config = TFTConfig()
+                # STEP 4: Load model first to get training dataset parameters
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Loading trained model..."))
+                crypto_tft = CryptoTFT.load_model(model_path, verbose=False)
 
-                # Create prediction dataset using CryptoTimeSeriesDataset
-                from src.ml.training.dataset import CryptoTimeSeriesDataset
+                # Get training dataset from model (TFT models store this internally)
+                if not hasattr(crypto_tft.model, 'dataset_parameters'):
+                    raise ValueError("Model doesn't have training dataset parameters. Please retrain the model.")
 
-                prediction_dataset = CryptoTimeSeriesDataset(
-                    data=live_df,
-                    context_length=config.max_encoder_length,
-                    prediction_length=config.max_prediction_length,
-                    target_column='close',
-                    verbose=False
+                # Create prediction dataset using from_parameters to match training config
+                from pytorch_forecasting import TimeSeriesDataSet
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Creating dataset from model training parameters..."))
+
+                # Modify parameters to allow unknown categories
+                params = crypto_tft.model.dataset_parameters.copy()
+                if 'categorical_encoders' in params:
+                    for key, encoder in params['categorical_encoders'].items():
+                        if hasattr(encoder, 'add_nan'):
+                            encoder.add_nan = True
+
+                prediction_dataset = TimeSeriesDataSet.from_parameters(
+                    params,
+                    live_df,
+                    predict=True,  # Inference mode
+                    stop_randomization=True  # No augmentation
                 )
 
                 # Create DataLoader
-                live_loader = prediction_dataset.get_dataloader(
+                live_loader = prediction_dataset.to_dataloader(
+                    train=False,  # Inference mode: no shuffling
                     batch_size=1,
-                    shuffle=False,
                     num_workers=0
                 )
 
                 self.root.after(0, lambda: self.ml_panel.log_message(
-                    f"[PREDICTION] OK Dataset created with {len(prediction_dataset.dataset)} samples"
+                    f"[PREDICTION] OK Dataset created with {len(prediction_dataset)} samples"
                 ))
 
-                # STEP 5: Load model and predict
-                self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Loading trained model..."))
-                crypto_tft = CryptoTFT.load_model(model_path, verbose=False)
-
+                # STEP 5: Generate predictions (model already loaded)
                 self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] Generating predictions from current market data..."))
                 predictions = crypto_tft.predict_next_n_hours(live_loader, n_hours=10)
 
@@ -696,8 +789,8 @@ class CryptoAIPredictorApp:
                 feature_columns = preprocessor.feature_columns
 
                 # Display results in GUI (thread-safe) - use lambda defaults to capture values
-                self.root.after(0, lambda p=predictions, s=symbol, sc=scaler, fc=feature_columns, cp=current_price:
-                               self.ml_panel.display_prediction(p, s, sc, fc, cp))
+                self.root.after(0, lambda p=predictions, s=symbol, sc=scaler, fc=feature_columns, cp=current_price, hp=historical_prices:
+                               self.ml_panel.display_prediction(p, s, sc, fc, cp, hp))
                 self.root.after(0, lambda sym=symbol: self.ml_panel.log_message(f"[PREDICTION] OK Prediction complete for {sym}"))
 
             except FileNotFoundError:
@@ -714,6 +807,531 @@ class CryptoAIPredictorApp:
 
         # Start prediction thread
         thread = threading.Thread(target=prediction_thread, daemon=True)
+        thread.start()
+
+    def _on_model_test_click(self, model_path: str, symbol: str):
+        """Handle model test request"""
+        print(f"\n[APP] Model test requested")
+        print(f"[APP]   - Model: {model_path}")
+        print(f"[APP]   - Symbol: {symbol}")
+
+        self.ml_panel.log_message(f"[TEST] Running model test on {symbol}...")
+        self.ml_panel.log_message(f"[TEST] Using model: {model_path}")
+
+        if not ML_AVAILABLE:
+            messagebox.showerror("Error", "ML libraries not available. Please install PyTorch and dependencies.")
+            return
+
+        # Run test in background thread
+        def test_thread():
+            try:
+                from src.ml.preprocessing.preprocessor import CryptoPreprocessor
+                from src.ml.training.dataset import create_dataloaders
+                from src.ml.models.tft_model import CryptoTFT
+                from src.ml.models.model_config import TFTConfig
+                import torch
+                import numpy as np
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Loading preprocessor and test data..."))
+
+                # Load preprocessed data (from training)
+                preprocessor = CryptoPreprocessor(dataset_dir="dataset")
+
+                # Load scaler
+                scaler_path = "models/scalers.pkl"
+                try:
+                    preprocessor.load_scaler(scaler_path)
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] OK Loaded scaler"))
+                except:
+                    raise FileNotFoundError(f"Scaler not found. Please train a model first.")
+
+                # Process data to get test set
+                train_df, val_df, test_df = preprocessor.process_all(
+                    symbols=[symbol],
+                    save_scaler_path=scaler_path
+                )
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] OK Test set has {len(test_df)} samples"))
+
+                # Load model first to get training dataset parameters
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Loading model..."))
+                crypto_tft = CryptoTFT.load_model(model_path, verbose=False)
+
+                # Check if model has dataset parameters
+                if not hasattr(crypto_tft.model, 'dataset_parameters'):
+                    raise ValueError("Model doesn't have training dataset parameters. Please retrain the model.")
+
+                # Add time index for TFT
+                test_df = preprocessor.add_time_index(test_df)
+
+                # Create test dataset with SMALLER context to get more samples
+                from pytorch_forecasting import TimeSeriesDataSet
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Creating test dataset from model training parameters..."))
+
+                # Modify parameters to allow unknown categories and use smaller context
+                params = crypto_tft.model.dataset_parameters.copy()
+
+                # CRITICAL: Reduce encoder length for testing to get more samples
+                # Instead of 2000, use min(500, len(test_df) // 4)
+                original_encoder_length = params.get('max_encoder_length', 2000)
+                test_encoder_length = min(168, len(test_df) // 10)  # Use 1 week or 10% of data
+                params['max_encoder_length'] = test_encoder_length
+
+                self.root.after(0, lambda orig=original_encoder_length, new=test_encoder_length:
+                    self.ml_panel.log_message(f"[TEST] Using encoder_length={new} (training used {orig}) to get more test samples"))
+
+                if 'categorical_encoders' in params:
+                    for key, encoder in params['categorical_encoders'].items():
+                        if hasattr(encoder, 'add_nan'):
+                            encoder.add_nan = True
+
+                test_dataset = TimeSeriesDataSet.from_parameters(
+                    params,
+                    test_df,
+                    predict=True,  # Inference mode
+                    stop_randomization=True  # No augmentation
+                )
+
+                self.root.after(0, lambda n=len(test_dataset):
+                    self.ml_panel.log_message(f"[TEST] Dataset created with {n} valid sequences"))
+
+                # Create DataLoader with smaller batch size for more batches
+                config = TFTConfig()
+                test_loader = test_dataset.to_dataloader(
+                    train=False,  # Inference mode: no shuffling
+                    batch_size=min(32, config.batch_size),  # Smaller batches = more iterations
+                    num_workers=0
+                )
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] OK Test dataset created with {len(test_dataset)} samples"))
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Running predictions on test set..."))
+
+                # Generate predictions on test set
+                model = crypto_tft.model
+                model.eval()
+
+                # Detect model device
+                device = next(model.parameters()).device
+                self.root.after(0, lambda d=str(device): self.ml_panel.log_message(f"[TEST] Model device: {d}"))
+
+                all_predictions = []
+                all_actuals = []
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Processing {len(test_loader)} batches..."))
+
+                # Process ALL batches to get comprehensive test results
+                with torch.no_grad():
+                    for batch_idx, batch in enumerate(test_loader):
+                        # Batch is a tuple: (x, y) where x is dict of inputs, y is target
+                        if isinstance(batch, (tuple, list)):
+                            x, y = batch
+                        else:
+                            x = batch
+                            y = None
+
+                        # Move batch to model device
+                        if isinstance(x, dict):
+                            x = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in x.items()}
+                        elif isinstance(x, torch.Tensor):
+                            x = x.to(device)
+
+                        if y is not None:
+                            if isinstance(y, torch.Tensor):
+                                y = y.to(device)
+                            elif isinstance(y, (tuple, list)):
+                                y = tuple(yi.to(device) if isinstance(yi, torch.Tensor) else yi for yi in y)
+
+                        # Get predictions - pass the input dict
+                        outputs = model(x)
+
+                        # Extract predictions
+                        if hasattr(outputs, 'prediction'):
+                            preds = outputs.prediction.cpu().numpy()
+                        else:
+                            preds = outputs[0].cpu().numpy() if isinstance(outputs, tuple) else outputs.cpu().numpy()
+
+                        # Get actual values from target
+                        if y is not None:
+                            actuals = y[0].cpu().numpy() if isinstance(y, tuple) else y.cpu().numpy()
+                        else:
+                            # Fall back to getting from x dict if y not available
+                            actuals = x['encoder_target'].cpu().numpy()
+
+                        # Handle different output shapes
+                        if len(preds.shape) == 3:
+                            all_predictions.extend(preds[:, 0, 0])  # (batch, time, features)
+                        elif len(preds.shape) == 2:
+                            all_predictions.extend(preds[:, 0])  # (batch, time)
+                        else:
+                            all_predictions.extend(preds)
+
+                        # Handle actual values
+                        if len(actuals.shape) == 2:
+                            all_actuals.extend(actuals[:, -1])  # Last encoder value
+                        else:
+                            all_actuals.extend(actuals)
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Calculating metrics..."))
+
+                # Convert to numpy arrays
+                predictions_arr = np.array(all_predictions)
+                actuals_arr = np.array(all_actuals)
+
+                # Log shapes for debugging
+                print(f"[TEST] Predictions shape: {predictions_arr.shape}, Actuals shape: {actuals_arr.shape}")
+                self.root.after(0, lambda p=len(predictions_arr), a=len(actuals_arr):
+                    self.ml_panel.log_message(f"[TEST] Collected {p} predictions and {a} actuals"))
+
+                # Check if we have enough data
+                if len(predictions_arr) < 10:
+                    self.root.after(0, lambda: self.ml_panel.log_message(
+                        f"[TEST] ⚠️ Warning: Only {len(predictions_arr)} samples collected. Results may not be representative."
+                    ))
+                    self.root.after(0, lambda: self.ml_panel.log_message(
+                        "[TEST] Tip: Model needs sufficient context (encoder_length). Test set may be too small."
+                    ))
+
+                # Validate data
+                if len(predictions_arr) == 0 or len(actuals_arr) == 0:
+                    raise ValueError(f"No predictions generated. Predictions: {len(predictions_arr)}, Actuals: {len(actuals_arr)}")
+
+                if len(predictions_arr) != len(actuals_arr):
+                    # Truncate to minimum length
+                    min_len = min(len(predictions_arr), len(actuals_arr))
+                    predictions_arr = predictions_arr[:min_len]
+                    actuals_arr = actuals_arr[:min_len]
+                    self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] [!] Truncated to {min_len} samples"))
+
+                # Denormalize predictions and actuals
+                scaler = preprocessor.scalers.get(symbol)
+                if scaler:
+                    # Get the index of 'close' in feature columns
+                    feature_columns = preprocessor.feature_columns
+                    close_idx = feature_columns.index('close')
+
+                    # Create dummy arrays with all features
+                    dummy_pred = np.zeros((len(predictions_arr), len(feature_columns)))
+                    dummy_actual = np.zeros((len(actuals_arr), len(feature_columns)))
+
+                    # Set close values
+                    dummy_pred[:, close_idx] = predictions_arr
+                    dummy_actual[:, close_idx] = actuals_arr
+
+                    # Inverse transform
+                    pred_denorm = scaler.inverse_transform(dummy_pred)[:, close_idx]
+                    actual_denorm = scaler.inverse_transform(dummy_actual)[:, close_idx]
+                else:
+                    pred_denorm = predictions_arr
+                    actual_denorm = actuals_arr
+
+                # Calculate metrics
+                mae = np.mean(np.abs(pred_denorm - actual_denorm))
+                rmse = np.sqrt(np.mean((pred_denorm - actual_denorm) ** 2))
+
+                # Directional accuracy
+                actual_direction = np.diff(actual_denorm) > 0
+                pred_direction = np.diff(pred_denorm) > 0
+                directional_accuracy = np.mean(actual_direction == pred_direction) * 100
+
+                # Test loss (normalized)
+                test_loss = np.mean((predictions_arr - actuals_arr) ** 2)
+
+                metrics = {
+                    'mae': mae,
+                    'rmse': rmse,
+                    'directional_accuracy': directional_accuracy,
+                    'test_loss': test_loss
+                }
+
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] ===== TESTING COMPLETE ====="))
+                self.root.after(0, lambda n=len(predictions_arr): self.ml_panel.log_message(f"[TEST] Tested on {n} prediction points"))
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] MAE: ${mae:.2f}, RMSE: ${rmse:.2f}, Dir Acc: {directional_accuracy:.1f}%"))
+
+                # Calculate additional useful metrics
+                avg_error_pct = (mae / np.mean(actual_denorm)) * 100
+                self.root.after(0, lambda pct=avg_error_pct: self.ml_panel.log_message(f"[TEST] Average Error: {pct:.2f}% of price"))
+
+                # Display results
+                self.root.after(0, lambda m=metrics, a=actual_denorm, p=pred_denorm:
+                               self.ml_panel.display_test_results(m, a.tolist(), p.tolist()))
+
+            except FileNotFoundError as e:
+                error_msg = str(e)
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] X {error_msg}"))
+                self.root.after(0, lambda: messagebox.showerror("File Not Found", error_msg))
+            except Exception as e:
+                error_msg = f"Model test failed: {str(e)}"
+                self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] X {error_msg}"))
+                self.root.after(0, lambda: messagebox.showerror("Test Failed", error_msg))
+                print(f"[APP] Test error: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Start test thread
+        thread = threading.Thread(target=test_thread, daemon=True)
+        thread.start()
+
+    def _on_run_backtest(self, config: dict):
+        """Handle backtest request"""
+        print(f"\n[APP] Backtest requested")
+        print(f"[APP]   - Config: {config}")
+
+        if not ML_AVAILABLE:
+            messagebox.showerror("Error", "ML libraries not available. Please install PyTorch and dependencies.")
+            return
+
+        # Run backtest in background thread
+        def backtest_thread():
+            try:
+                from src.ml.backtest import CryptoBacktester, BacktestConfig
+                from src.ml.preprocessing.preprocessor import CryptoPreprocessor
+                import torch
+                import numpy as np
+                import pandas as pd
+
+                # Load model
+                model_path = config['model_path']
+                initial_capital = config['initial_capital']
+                trade_fee = config['trade_fee']
+                confidence_threshold = config['confidence_threshold']
+
+                # Determine model type from path
+                if 'lstm' in model_path.lower():
+                    from src.ml.models.lstm_model import SimpleLSTMTrainer
+
+                    # Load LSTM model
+                    lstm_trainer = SimpleLSTMTrainer()
+                    lstm_trainer.load_model(model_path)
+                    model = lstm_trainer.model
+                    model_type = 'lstm'
+                else:
+                    from src.ml.models.tft_model import CryptoTFT
+
+                    # Load TFT model
+                    crypto_tft = CryptoTFT.load_model(model_path, verbose=False)
+                    model = crypto_tft.model
+                    model_type = 'tft'
+
+                # Load preprocessed test data
+                preprocessor = CryptoPreprocessor(dataset_dir="dataset")
+
+                # Load scaler
+                try:
+                    preprocessor.load_scaler("models/scalers.pkl")
+                except:
+                    raise FileNotFoundError("Scaler not found. Please train a model first.")
+
+                # Get test data (using first available symbol)
+                symbols = ['ETHUSDT']  # TODO: Make this configurable
+                train_df, val_df, test_df = preprocessor.process_all(
+                    symbols=symbols,
+                    save_scaler_path="models/scalers.pkl"
+                )
+
+                # Generate predictions on test set
+                model.eval()
+                predictions_list = []
+                actuals_list = []
+                timestamps_list = []
+
+                with torch.no_grad():
+                    if model_type == 'lstm':
+                        # LSTM predictions
+                        from src.ml.models.lstm_model import SimpleLSTMDataset
+
+                        test_dataset = SimpleLSTMDataset(test_df, sequence_length=168)
+
+                        for i in range(min(len(test_dataset), 500)):  # Limit to 500 samples
+                            x, y = test_dataset[i]
+                            pred = model.predict_next_hours(x.numpy())
+
+                            predictions_list.append(pred[0])  # First hour prediction
+                            actuals_list.append(y[0].numpy())  # First hour actual
+
+                            # Get timestamp
+                            idx = test_dataset.valid_indices[i]
+                            if 'datetime' in test_df.columns:
+                                timestamps_list.append(test_df.iloc[idx]['datetime'])
+                    else:
+                        # TFT predictions
+                        from pytorch_forecasting import TimeSeriesDataSet
+
+                        # Check if model has dataset parameters
+                        if not hasattr(model, 'dataset_parameters'):
+                            raise ValueError("Model doesn't have training dataset parameters. Please retrain the model.")
+
+                        # Add time_idx for TFT
+                        test_df = preprocessor.add_time_index(test_df)
+
+                        # Create test dataset using model's training parameters with smaller context
+                        # Modify parameters to allow unknown categories and use smaller context
+                        params = model.dataset_parameters.copy()
+
+                        # CRITICAL: Reduce encoder length for backtesting to get MORE samples
+                        original_encoder_length = params.get('max_encoder_length', 2000)
+                        test_encoder_length = min(168, len(test_df) // 10)  # Use 1 week or 10% of data
+                        params['max_encoder_length'] = test_encoder_length
+
+                        print(f"[APP] Backtest using encoder_length={test_encoder_length} (training used {original_encoder_length})")
+
+                        # Allow unknown categories for static categoricals (e.g., symbol)
+                        if 'categorical_encoders' in params:
+                            for key, encoder in params['categorical_encoders'].items():
+                                if hasattr(encoder, 'add_nan'):
+                                    encoder.add_nan = True
+
+                        test_dataset = TimeSeriesDataSet.from_parameters(
+                            params,
+                            test_df,
+                            predict=True,  # Inference mode
+                            stop_randomization=True  # No augmentation
+                        )
+
+                        print(f"[APP] Backtest dataset created with {len(test_dataset)} samples")
+
+                        # Create DataLoader
+                        test_loader = test_dataset.to_dataloader(
+                            train=False,  # Inference mode: no shuffling
+                            batch_size=32,
+                            num_workers=0
+                        )
+
+                        for batch_idx, batch in enumerate(test_loader):
+                            if batch_idx >= 200:  # Limit to 200 batches (6400 samples max)
+                                break
+
+                            # Extract batch data
+                            if isinstance(batch, (tuple, list)):
+                                x, y = batch
+                            else:
+                                x = batch
+                                y = None
+
+                            # Move to device if needed
+                            device = next(model.parameters()).device
+                            if isinstance(x, dict):
+                                x = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in x.items()}
+
+                            # Get predictions
+                            outputs = model(x)
+
+                            # Extract predictions
+                            if hasattr(outputs, 'prediction'):
+                                preds = outputs.prediction.cpu().numpy()
+                            else:
+                                preds = outputs[0].cpu().numpy() if isinstance(outputs, tuple) else outputs.cpu().numpy()
+
+                            # Get actual values
+                            if y is not None:
+                                actuals = y[0].cpu().numpy() if isinstance(y, tuple) else y.cpu().numpy()
+                            else:
+                                actuals = x['encoder_target'].cpu().numpy()
+
+                            # Handle different output shapes - take first hour prediction
+                            if len(preds.shape) == 3:
+                                batch_preds = preds[:, 0, 0]  # (batch, time, features)
+                            elif len(preds.shape) == 2:
+                                batch_preds = preds[:, 0]  # (batch, time)
+                            else:
+                                batch_preds = preds
+
+                            # Handle actual values
+                            if len(actuals.shape) == 3:
+                                batch_actuals = actuals[:, 0, 0]
+                            elif len(actuals.shape) == 2:
+                                batch_actuals = actuals[:, 0]
+                            else:
+                                batch_actuals = actuals
+
+                            predictions_list.extend(batch_preds)
+                            actuals_list.extend(batch_actuals)
+
+                            # Get timestamps (approximate from test_df)
+                            for i in range(len(batch_preds)):
+                                idx = batch_idx * 32 + i
+                                if idx < len(test_df) and 'datetime' in test_df.columns:
+                                    timestamps_list.append(test_df.iloc[idx]['datetime'])
+
+                predictions = np.array(predictions_list)
+                actuals = np.array(actuals_list)
+                timestamps = pd.DatetimeIndex(timestamps_list)
+
+                print(f"[APP] Backtest collected {len(predictions)} prediction points")
+                print(f"[APP] Date range: {timestamps[0]} to {timestamps[-1]}")
+
+                # Denormalize predictions and actuals for backtesting
+                # (Backtester needs real prices, not normalized values)
+                scaler = preprocessor.scalers.get(symbols[0])
+                if scaler:
+                    feature_columns = preprocessor.feature_columns
+                    close_idx = feature_columns.index('close')
+
+                    # Create dummy arrays with all features
+                    dummy_pred = np.zeros((len(predictions), len(feature_columns)))
+                    dummy_actual = np.zeros((len(actuals), len(feature_columns)))
+
+                    # Set close values
+                    dummy_pred[:, close_idx] = predictions
+                    dummy_actual[:, close_idx] = actuals
+
+                    # Inverse transform to get real prices
+                    predictions_denorm = scaler.inverse_transform(dummy_pred)[:, close_idx]
+                    actuals_denorm = scaler.inverse_transform(dummy_actual)[:, close_idx]
+
+                    print(f"[APP] Denormalized predictions: {predictions_denorm[:5]}")
+                    print(f"[APP] Denormalized actuals: {actuals_denorm[:5]}")
+                else:
+                    predictions_denorm = predictions
+                    actuals_denorm = actuals
+                    print(f"[APP] Warning: No scaler found, using normalized values")
+
+                # Run backtest
+                backtest_config = BacktestConfig(
+                    initial_capital=initial_capital,
+                    trade_fee=trade_fee,
+                    confidence_threshold=confidence_threshold
+                )
+
+                backtester = CryptoBacktester(backtest_config, verbose=True)
+                results = backtester.run_backtest(predictions_denorm, actuals_denorm, timestamps)
+
+                # Display results in GUI
+                results_dict = {
+                    'initial_capital': results.initial_capital,
+                    'final_capital': results.final_capital,
+                    'total_return': results.total_return,
+                    'total_return_pct': results.total_return_pct,
+                    'num_trades': results.num_trades,
+                    'win_rate': results.win_rate,
+                    'profit_loss_ratio': results.profit_loss_ratio,
+                    'prediction_mae': results.prediction_mae,
+                    'prediction_rmse': results.prediction_rmse,
+                    'prediction_r2': results.prediction_r2,
+                    'direction_accuracy': results.direction_accuracy
+                }
+
+                self.root.after(0, lambda: self.backtest_panel.display_results(results_dict))
+
+                # Create and save charts
+                # Note: plot_results saves to file and returns closed figure
+                # We'll load the image file to display in GUI instead
+                plot_path = "backtest_results.png"
+                backtester.plot_results(results, save_path=plot_path)
+
+                # Display chart by loading the saved image
+                self.root.after(0, lambda: self.backtest_panel.update_chart_from_file(plot_path))
+
+            except Exception as e:
+                error_msg = f"Backtest failed: {str(e)}"
+                print(f"[APP] {error_msg}")
+                import traceback
+                traceback.print_exc()
+                self.root.after(0, lambda: messagebox.showerror("Backtest Error", error_msg))
+
+        # Start backtest thread
+        thread = threading.Thread(target=backtest_thread, daemon=True)
         thread.start()
 
     def run(self):

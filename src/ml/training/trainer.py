@@ -106,12 +106,13 @@ class TFTTrainer:
         if self.verbose:
             print(f"[TRAINER] [OK] TFTTrainer initialized")
 
-    def setup_model(self, train_dataset):
+    def setup_model(self, train_dataset, pretrained_path: Optional[str] = None):
         """
-        Setup model from dataset
+        Setup model from dataset or load from pretrained checkpoint
 
         Args:
             train_dataset: TimeSeriesDataSet for training
+            pretrained_path: Optional path to pretrained checkpoint for fine-tuning
         """
         if self.verbose:
             print(f"\n[TRAINER] Setting up model...")
@@ -120,8 +121,23 @@ class TFTTrainer:
             # Create model wrapper
             self.model_wrapper = CryptoTFT(self.config, verbose=self.verbose)
 
-            # Create model from dataset
-            self.model_wrapper.create_from_dataset(train_dataset)
+            if pretrained_path and Path(pretrained_path).exists():
+                # Load from pretrained checkpoint
+                if self.verbose:
+                    print(f"[TRAINER]   - Loading pretrained model from: {pretrained_path}")
+
+                from pytorch_forecasting import TemporalFusionTransformer
+                pretrained_model = TemporalFusionTransformer.load_from_checkpoint(pretrained_path)
+                self.model_wrapper.model = pretrained_model
+
+                if self.verbose:
+                    print(f"[TRAINER] [OK] Loaded pretrained model for fine-tuning")
+            else:
+                # Create model from dataset (train from scratch)
+                self.model_wrapper.create_from_dataset(train_dataset)
+
+                if self.verbose:
+                    print(f"[TRAINER] [OK] Created new model from scratch")
 
             if self.verbose:
                 print(f"[TRAINER] [OK] Model setup complete")
@@ -302,6 +318,13 @@ class TFTTrainer:
 
         if self.pl_trainer is None:
             raise ValueError("Trainer not setup. Call setup_trainer() first.")
+
+        # Enable Tensor Core optimization for CUDA devices
+        import torch
+        if torch.cuda.is_available():
+            torch.set_float32_matmul_precision('medium')
+            if self.verbose:
+                print(f"\n[TRAINER] Tensor Core optimization enabled (medium precision)")
 
         # VALIDATION: Run 5-step validation before training
         if validate_pipeline and self.verbose:
