@@ -1,0 +1,44 @@
+[
+  {
+    "timestamp": "2026-01-15T23:36:47.398613",
+    "stage": "signal_backtest",
+    "step": "complete",
+    "status": "info",
+    "data": {
+      "symbol": "BTCUSDT",
+      "initial_capital": 1000.0,
+      "final_capital": 837.6993157603833,
+      "return_pct": -16.23006842396166,
+      "num_trades": 19,
+      "win_rate": 15.789473684210526
+    }
+  },
+  {
+    "timestamp": "2026-01-15T23:42:43.457521",
+    "stage": "signal_backtest",
+    "step": "complete",
+    "status": "info",
+    "data": {
+      "symbol": "ETHUSDT",
+      "initial_capital": 1000.0,
+      "final_capital": 930.6918867457462,
+      "return_pct": -6.930811325425379,
+      "num_trades": 18,
+      "win_rate": 22.22222222222222
+    }
+  },
+  {
+    "timestamp": "2026-01-15T23:42:57.635740",
+    "stage": "signal_backtest",
+    "step": "complete",
+    "status": "info",
+    "data": {
+      "symbol": "XRPUSDT",
+      "initial_capital": 1000.0,
+      "final_capital": 972.066001978993,
+      "return_pct": -2.7933998021007045,
+      "num_trades": 18,
+      "win_rate": 27.77777777777778
+    }
+  }
+]

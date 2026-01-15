@@ -50,6 +50,8 @@ class BacktestPanel:
         self.initial_capital_var = tk.StringVar(value="1000")
         self.trade_fee_var = tk.StringVar(value="0.1")
         self.confidence_threshold_var = tk.StringVar(value="1.0")
+        self.backtest_mode = tk.StringVar(value="signals")  # "signals" or "model"
+        self.symbol_var = tk.StringVar(value="BTCUSDT")
 
         self.backtest_running = False
         self.results = None
@@ -121,7 +123,7 @@ class BacktestPanel:
         """Create configuration section"""
         section = tk.LabelFrame(
             parent,
-            text=" ⚙️ Backtest Configuration ",
+            text=" Backtest Configuration ",
             font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_LARGE, 'bold'),
             bg=get_color('bg_medium'),
             fg=get_color('text_primary'),
@@ -132,12 +134,70 @@ class BacktestPanel:
         )
         section.pack(fill=tk.X, padx=15, pady=(0, 12))
 
-        # Model selection
-        model_frame = tk.Frame(section, bg=get_color('bg_medium'))
-        model_frame.pack(fill=tk.X, pady=5)
+        # MODE SELECTOR (NEW!)
+        mode_frame = tk.Frame(section, bg=get_color('bg_medium'))
+        mode_frame.pack(fill=tk.X, pady=(0, 15))
 
         tk.Label(
-            model_frame,
+            mode_frame,
+            text="Backtest Mode:",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL, 'bold')
+        ).pack(side=tk.LEFT, padx=(0, 15))
+
+        tk.Radiobutton(
+            mode_frame,
+            text="Technical Signals (No AI)",
+            variable=self.backtest_mode,
+            value="signals",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            selectcolor=get_color('bg_light'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL),
+            command=self._update_mode_ui
+        ).pack(side=tk.LEFT, padx=(0, 20))
+
+        tk.Radiobutton(
+            mode_frame,
+            text="AI Model Predictions",
+            variable=self.backtest_mode,
+            value="model",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            selectcolor=get_color('bg_light'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL),
+            command=self._update_mode_ui
+        ).pack(side=tk.LEFT)
+
+        # Symbol selection (for signal mode)
+        self.symbol_frame = tk.Frame(section, bg=get_color('bg_medium'))
+        self.symbol_frame.pack(fill=tk.X, pady=5)
+
+        tk.Label(
+            self.symbol_frame,
+            text="Symbol:",
+            bg=get_color('bg_medium'),
+            fg=get_color('text_primary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL, 'bold')
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        symbol_combo = ttk.Combobox(
+            self.symbol_frame,
+            textvariable=self.symbol_var,
+            values=["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"],
+            state='readonly',
+            width=20
+        )
+        symbol_combo.pack(side=tk.LEFT)
+
+        # Model selection (hidden in signals mode)
+        self.model_frame = tk.Frame(section, bg=get_color('bg_medium'))
+        self.model_frame.pack(fill=tk.X, pady=5)
+        self.model_frame.pack_forget()  # Hide by default (signals mode)
+
+        tk.Label(
+            self.model_frame,
             text="Model:",
             bg=get_color('bg_medium'),
             fg=get_color('text_primary'),
@@ -145,7 +205,7 @@ class BacktestPanel:
         ).pack(side=tk.LEFT, padx=(0, 10))
 
         tk.Entry(
-            model_frame,
+            self.model_frame,
             textvariable=self.model_path_str,
             state='readonly',
             bg=get_color('bg_light'),
@@ -154,7 +214,7 @@ class BacktestPanel:
         ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
         tk.Button(
-            model_frame,
+            self.model_frame,
             text="Browse",
             command=self._browse_model,
             bg=get_color('bg_light'),
@@ -379,6 +439,15 @@ class BacktestPanel:
         ax.axis('off')
         self.canvas.draw()
 
+    def _update_mode_ui(self):
+        """Show/hide UI elements based on mode"""
+        if self.backtest_mode.get() == "signals":
+            self.symbol_frame.pack(fill=tk.X, pady=5)
+            self.model_frame.pack_forget()
+        else:
+            self.symbol_frame.pack_forget()
+            self.model_frame.pack(fill=tk.X, pady=5)
+
     def _browse_model(self):
         """Browse for model file"""
         path = filedialog.askopenfilename(
@@ -394,13 +463,17 @@ class BacktestPanel:
 
     def _run_backtest(self):
         """Run backtest"""
-        if self.model_path_str.get() == "No model loaded":
+        mode = self.backtest_mode.get()
+
+        if mode == "model" and self.model_path_str.get() == "No model loaded":
             messagebox.showwarning("No Model", "Please select a model first")
             return
 
         try:
             config = {
-                'model_path': self.model_path_str.get(),
+                'mode': mode,
+                'symbol': self.symbol_var.get(),
+                'model_path': self.model_path_str.get() if mode == "model" else None,
                 'initial_capital': float(self.initial_capital_var.get()),
                 'trade_fee': float(self.trade_fee_var.get()) / 100,
                 'confidence_threshold': float(self.confidence_threshold_var.get()) / 100
@@ -409,12 +482,276 @@ class BacktestPanel:
             self.run_btn.config(state=tk.DISABLED)
             self.backtest_running = True
 
-            if self.on_run_backtest:
-                self.on_run_backtest(config)
+            if mode == "signals":
+                # Run signal-based backtest locally
+                self._run_signal_backtest(config)
+            else:
+                # Run model-based backtest via callback
+                if self.on_run_backtest:
+                    self.on_run_backtest(config)
 
         except ValueError as e:
             messagebox.showerror("Invalid Input", f"Please check your input values:\n{e}")
             self.run_btn.config(state=tk.NORMAL)
+
+    def _run_signal_backtest(self, config: Dict[str, Any]):
+        """Run backtest using technical indicator signals (NO AI REQUIRED)"""
+        import threading
+
+        def backtest_thread():
+            try:
+                print(f"\n[BACKTEST_PANEL] Starting signal backtest for {config['symbol']}...")
+
+                from src.ml.preprocessing.preprocessor import CryptoPreprocessor
+                from src.utils.debug_logger import debug_log
+                import numpy as np
+                import pandas as pd
+
+                # Load data
+                preprocessor = CryptoPreprocessor("dataset")
+                df = preprocessor.load_symbol_data(config['symbol'])
+
+                if df is None or len(df) < 200:
+                    self.parent.after(0, lambda: messagebox.showerror("Error", "Insufficient data for backtest"))
+                    self.parent.after(0, lambda: self.run_btn.config(state=tk.NORMAL))
+                    return
+
+                df = df.sort_values('datetime').tail(1000).reset_index(drop=True)
+                print(f"[BACKTEST_PANEL]   - Using {len(df)} candles for backtest")
+
+                # Calculate technical indicators
+                delta = df['close'].diff()
+                gain = delta.where(delta > 0, 0).rolling(14).mean()
+                loss = -delta.where(delta < 0, 0).rolling(14).mean()
+                rs = gain / loss.replace(0, np.nan)
+                df['rsi'] = 100 - (100 / (1 + rs))
+
+                ema_12 = df['close'].ewm(span=12).mean()
+                ema_26 = df['close'].ewm(span=26).mean()
+                df['macd'] = ema_12 - ema_26
+                df['macd_signal'] = df['macd'].ewm(span=9).mean()
+
+                df['sma_10'] = df['close'].rolling(10).mean()
+                df['sma_20'] = df['close'].rolling(20).mean()
+
+                # Generate signals
+                df = df.dropna().reset_index(drop=True)
+                signals = []
+
+                for i in range(len(df)):
+                    row = df.iloc[i]
+                    score = 0
+
+                    # RSI
+                    if row['rsi'] < 30:
+                        score += 2
+                    elif row['rsi'] < 40:
+                        score += 1
+                    elif row['rsi'] > 70:
+                        score -= 2
+                    elif row['rsi'] > 60:
+                        score -= 1
+
+                    # MACD
+                    if row['macd'] > 0 and row['macd'] > row['macd_signal']:
+                        score += 2
+                    elif row['macd'] > row['macd_signal']:
+                        score += 1
+                    elif row['macd'] < 0 and row['macd'] < row['macd_signal']:
+                        score -= 2
+                    elif row['macd'] < row['macd_signal']:
+                        score -= 1
+
+                    # Trend
+                    if row['sma_10'] > row['sma_20'] * 1.01:
+                        score += 2
+                    elif row['sma_10'] > row['sma_20']:
+                        score += 1
+                    elif row['sma_10'] < row['sma_20'] * 0.99:
+                        score -= 2
+                    elif row['sma_10'] < row['sma_20']:
+                        score -= 1
+
+                    signals.append(score)
+
+                df['signal_score'] = signals
+
+                # Run backtest simulation
+                capital = config['initial_capital']
+                position = 0  # 0 = no position, 1 = long
+                entry_price = 0
+                trades = []
+                equity_curve = [capital]
+
+                for i in range(1, len(df)):
+                    current_price = df['close'].iloc[i]
+                    score = df['signal_score'].iloc[i]
+
+                    # Trading logic
+                    if position == 0:  # No position
+                        if score >= 3:  # Strong buy signal
+                            position = 1
+                            entry_price = current_price
+                            capital -= capital * config['trade_fee']
+                            trades.append({'type': 'BUY', 'price': current_price, 'idx': i})
+                    else:  # In position
+                        if score <= -2:  # Sell signal
+                            pnl = (current_price - entry_price) / entry_price
+                            capital = capital * (1 + pnl) * (1 - config['trade_fee'])
+                            trades.append({'type': 'SELL', 'price': current_price, 'idx': i,
+                                          'pnl': pnl * 100, 'win': pnl > 0})
+                            position = 0
+
+                    equity_curve.append(capital if position == 0 else capital * (1 + (current_price - entry_price) / entry_price))
+
+                # Close final position if open
+                if position == 1:
+                    final_price = df['close'].iloc[-1]
+                    pnl = (final_price - entry_price) / entry_price
+                    capital = capital * (1 + pnl) * (1 - config['trade_fee'])
+                    trades.append({'type': 'SELL', 'price': final_price, 'idx': len(df)-1,
+                                  'pnl': pnl * 100, 'win': pnl > 0})
+
+                # Calculate metrics
+                sell_trades = [t for t in trades if t['type'] == 'SELL']
+                wins = [t for t in sell_trades if t.get('win', False)]
+                losses = [t for t in sell_trades if not t.get('win', True)]
+
+                results = {
+                    'initial_capital': config['initial_capital'],
+                    'final_capital': capital,
+                    'total_return': capital - config['initial_capital'],
+                    'total_return_pct': ((capital / config['initial_capital']) - 1) * 100,
+                    'num_trades': len(sell_trades),
+                    'win_rate': (len(wins) / len(sell_trades) * 100) if sell_trades else 0,
+                    'profit_loss_ratio': (np.mean([t['pnl'] for t in wins]) / abs(np.mean([t['pnl'] for t in losses]))) if wins and losses else 0,
+                    'prediction_mae': 0,  # N/A for signal backtest
+                    'prediction_rmse': 0,
+                    'prediction_r2': 0,
+                    'direction_accuracy': (len(wins) / len(sell_trades) * 100) if sell_trades else 0,
+                    'equity_curve': equity_curve,
+                    'trades': trades,
+                    'prices': df['close'].tolist()
+                }
+
+                print(f"[BACKTEST_PANEL]   - Final capital: ${capital:,.2f}")
+                print(f"[BACKTEST_PANEL]   - Return: {results['total_return_pct']:.2f}%")
+                print(f"[BACKTEST_PANEL]   - Trades: {len(sell_trades)}, Win rate: {results['win_rate']:.1f}%")
+
+                # Log to debug
+                debug_log("signal_backtest", "complete", {
+                    "symbol": config['symbol'],
+                    "initial_capital": config['initial_capital'],
+                    "final_capital": capital,
+                    "return_pct": results['total_return_pct'],
+                    "num_trades": len(sell_trades),
+                    "win_rate": results['win_rate']
+                })
+
+                # Update UI on main thread
+                self.parent.after(0, lambda: self.display_results(results))
+                self.parent.after(0, lambda: self._plot_signal_backtest_results(results, df))
+                self.parent.after(0, lambda: self.run_btn.config(state=tk.NORMAL))
+
+            except Exception as e:
+                print(f"[BACKTEST_PANEL] [X] Signal backtest failed: {e}")
+                import traceback
+                traceback.print_exc()
+                self.parent.after(0, lambda: messagebox.showerror("Backtest Error", str(e)))
+                self.parent.after(0, lambda: self.run_btn.config(state=tk.NORMAL))
+
+        # Run in background thread
+        thread = threading.Thread(target=backtest_thread, daemon=True)
+        thread.start()
+
+    def _plot_signal_backtest_results(self, results: Dict[str, Any], df):
+        """Plot signal backtest results"""
+        try:
+            import numpy as np
+
+            self.figure.clear()
+
+            # Create subplots
+            ax1 = self.figure.add_subplot(2, 2, 1)
+            ax2 = self.figure.add_subplot(2, 2, 2)
+            ax3 = self.figure.add_subplot(2, 2, 3)
+            ax4 = self.figure.add_subplot(2, 2, 4)
+
+            # 1. Equity Curve
+            equity = results.get('equity_curve', [])
+            ax1.plot(equity, color='#4fc3f7', linewidth=2)
+            ax1.axhline(y=results['initial_capital'], color='gray', linestyle='--', alpha=0.5)
+            ax1.set_title('Equity Curve', color=get_color('text_primary'), fontweight='bold')
+            ax1.set_xlabel('Time', color=get_color('text_primary'))
+            ax1.set_ylabel('Capital ($)', color=get_color('text_primary'))
+            ax1.grid(True, alpha=0.3)
+            ax1.set_facecolor(get_color('bg_light'))
+
+            # 2. Price with trade markers
+            prices = results.get('prices', df['close'].tolist() if df is not None else [])
+            trades = results.get('trades', [])
+
+            ax2.plot(prices, color='#9e9e9e', linewidth=1, alpha=0.7, label='Price')
+            for trade in trades:
+                idx = trade.get('idx', 0)
+                if idx < len(prices):
+                    if trade['type'] == 'BUY':
+                        ax2.scatter(idx, prices[idx], color='#4caf50', s=50, marker='^', zorder=5)
+                    else:
+                        color = '#4caf50' if trade.get('win', False) else '#f44336'
+                        ax2.scatter(idx, prices[idx], color=color, s=50, marker='v', zorder=5)
+
+            ax2.set_title('Price & Trades', color=get_color('text_primary'), fontweight='bold')
+            ax2.set_xlabel('Time', color=get_color('text_primary'))
+            ax2.set_ylabel('Price ($)', color=get_color('text_primary'))
+            ax2.grid(True, alpha=0.3)
+            ax2.set_facecolor(get_color('bg_light'))
+
+            # 3. Trade P&L Distribution
+            sell_trades = [t for t in trades if t['type'] == 'SELL']
+            if sell_trades:
+                pnls = [t.get('pnl', 0) for t in sell_trades]
+                colors = ['#4caf50' if p > 0 else '#f44336' for p in pnls]
+                ax3.bar(range(len(pnls)), pnls, color=colors, alpha=0.7)
+                ax3.axhline(y=0, color='white', linewidth=1)
+            ax3.set_title('Trade P&L (%)', color=get_color('text_primary'), fontweight='bold')
+            ax3.set_xlabel('Trade #', color=get_color('text_primary'))
+            ax3.set_ylabel('P&L (%)', color=get_color('text_primary'))
+            ax3.grid(True, alpha=0.3, axis='y')
+            ax3.set_facecolor(get_color('bg_light'))
+
+            # 4. Summary Text
+            ax4.axis('off')
+            summary = f"""
+SIGNAL BACKTEST RESULTS
+{'='*35}
+
+Initial Capital:  ${results['initial_capital']:,.2f}
+Final Capital:    ${results['final_capital']:,.2f}
+Total Return:     {results['total_return_pct']:+.2f}%
+
+Total Trades:     {results['num_trades']}
+Win Rate:         {results['win_rate']:.1f}%
+P/L Ratio:        {results['profit_loss_ratio']:.2f}
+
+Strategy:         Technical Signals
+  - RSI (14)
+  - MACD (12/26/9)
+  - SMA Crossover (10/20)
+"""
+            ax4.text(0.1, 0.5, summary, fontsize=10, family='monospace',
+                    verticalalignment='center', color=get_color('text_primary'))
+            ax4.set_facecolor(get_color('bg_light'))
+
+            self.figure.tight_layout()
+            self.canvas.draw()
+
+            print(f"[BACKTEST_PANEL] [OK] Results plotted")
+
+        except Exception as e:
+            print(f"[BACKTEST_PANEL] [X] Failed to plot results: {e}")
+            import traceback
+            traceback.print_exc()
 
     def display_results(self, results: Dict[str, Any]):
         """

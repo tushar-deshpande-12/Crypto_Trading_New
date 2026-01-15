@@ -1,6 +1,6 @@
 """
 Training Metrics for Time Series Prediction
-Evaluation metrics: MAE, RMSE, MAPE, R², Direction Accuracy
+Evaluation metrics: MAE, RMSE, MAPE, R2, Direction Accuracy
 """
 
 import numpy as np
@@ -83,16 +83,16 @@ def mean_absolute_percentage_error(y_true: np.ndarray, y_pred: np.ndarray, epsil
 
 def r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """
-    Calculate R² (coefficient of determination)
+    Calculate R2 (coefficient of determination)
 
     Args:
         y_true: True values
         y_pred: Predicted values
 
     Returns:
-        R² value
+        R2 value
     """
-    print(f"[METRICS] Calculating R² score...")
+    print(f"[METRICS] Calculating R2 score...")
 
     try:
         ss_res = np.sum((y_true - y_pred) ** 2)
@@ -103,10 +103,10 @@ def r2_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
             return 0.0
 
         r2 = 1 - (ss_res / ss_tot)
-        print(f"[METRICS] [OK] R²: {r2:.4f}")
+        print(f"[METRICS] [OK] R2: {r2:.4f}")
         return float(r2)
     except Exception as e:
-        print(f"[METRICS] [X] R² calculation failed: {e}")
+        print(f"[METRICS] [X] R2 calculation failed: {e}")
         return float('nan')
 
 
@@ -228,7 +228,7 @@ class MetricsTracker:
                         self.best_metrics[metric_name] = (epoch, value)
                     else:
                         # Lower is better for loss, MAE, RMSE, MAPE
-                        # Higher is better for R², direction_accuracy
+                        # Higher is better for R2, direction_accuracy
                         if metric_name in ['r2', 'direction_accuracy']:
                             if value > self.best_metrics[metric_name][1]:
                                 self.best_metrics[metric_name] = (epoch, value)
@@ -461,18 +461,18 @@ def validate_loss_function(model, dataloader, verbose: bool = True) -> bool:
             issues = []
 
             if abs(correct_loss - random_loss) < 1e-6:
-                issues.append("❌ Loss is identical for different predictions!")
+                issues.append("[X] Loss is identical for different predictions!")
                 if verbose:
-                    print(f"\n  ❌ CRITICAL: Loss not responding to prediction changes!")
+                    print(f"\n  [X] CRITICAL: Loss not responding to prediction changes!")
 
             if wrong_loss < correct_loss * 1.2:
-                issues.append("❌ Very wrong predictions don't have significantly higher loss")
+                issues.append("[X] Very wrong predictions don't have significantly higher loss")
                 if verbose:
-                    print(f"\n  [!]️  WARNING: Loss doesn't penalize bad predictions enough")
+                    print(f"\n  [!]  WARNING: Loss doesn't penalize bad predictions enough")
 
             if issues:
                 if verbose:
-                    print(f"\n❌ STEP 2 FAILED: {len(issues)} issues found")
+                    print(f"\n[X] STEP 2 FAILED: {len(issues)} issues found")
                 return False
             else:
                 if verbose:
@@ -481,7 +481,7 @@ def validate_loss_function(model, dataloader, verbose: bool = True) -> bool:
 
     except Exception as e:
         if verbose:
-            print(f"\n❌ STEP 2 ERROR: {e}")
+            print(f"\n[X] STEP 2 ERROR: {e}")
         return False
 
 
@@ -584,23 +584,23 @@ def validate_baseline_comparison(model, dataloader, verbose: bool = True) -> boo
     issues = []
 
     if avg_model > avg_random:
-        issues.append("❌ Model worse than random!")
+        issues.append("[X] Model worse than random!")
         if verbose:
-            print(f"\n  ❌ CRITICAL: Model can't beat random guessing!")
+            print(f"\n  [X] CRITICAL: Model can't beat random guessing!")
 
     if avg_model > avg_constant:
-        issues.append("❌ Model worse than constant prediction!")
+        issues.append("[X] Model worse than constant prediction!")
         if verbose:
-            print(f"\n  ❌ CRITICAL: Model can't even predict the mean!")
+            print(f"\n  [X] CRITICAL: Model can't even predict the mean!")
 
     if improvement_random < 5:
-        issues.append("[!]️  Model barely improves over random (<5%)")
+        issues.append("[!]  Model barely improves over random (<5%)")
         if verbose:
-            print(f"\n  [!]️  WARNING: Very small improvement over baseline")
+            print(f"\n  [!]  WARNING: Very small improvement over baseline")
 
     if issues:
         if verbose:
-            print(f"\n❌ STEP 5 FAILED: Model not learning properly")
+            print(f"\n[X] STEP 5 FAILED: Model not learning properly")
         return False
     else:
         if verbose:

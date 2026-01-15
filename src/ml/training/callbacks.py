@@ -1,12 +1,18 @@
 """
 Training Callbacks for Improved Model Performance
 Implements learning rate warmup, gradient monitoring, and better early stopping
+Compatible with PyTorch Lightning 2.x
 """
 
 import torch
 import numpy as np
-from pytorch_lightning.callbacks import Callback
 from typing import Optional
+
+# Lightning 2.x compatible import
+try:
+    from lightning.pytorch.callbacks import Callback
+except ImportError:
+    from pytorch_lightning.callbacks import Callback
 
 
 class LearningRateWarmup(Callback):
@@ -213,8 +219,10 @@ class FeatureMonitor(Callback):
 
         print(f"\n[FEATURES] Checking feature health (epoch {trainer.current_epoch})...")
 
-        # Get a batch from validation dataloader
-        val_dataloader = trainer.val_dataloaders[0]
+        # Get a batch from validation dataloader (Lightning 2.x compatible)
+        val_dataloader = trainer.val_dataloaders
+        if isinstance(val_dataloader, (list, tuple)):
+            val_dataloader = val_dataloader[0]
         batch = next(iter(val_dataloader))
 
         # Check continuous features

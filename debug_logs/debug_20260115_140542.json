@@ -1,0 +1,13 @@
+[
+  {
+    "timestamp": "2026-01-15T14:05:46.146703",
+    "stage": "preprocessing",
+    "step": "test_error",
+    "status": "error",
+    "data": {
+      "error_type": "UnicodeEncodeError",
+      "error_message": "'charmap' codec can't encode character '\\U0001f680' in position 0: character maps to <undefined>",
+      "context": {}
+    }
+  }
+]

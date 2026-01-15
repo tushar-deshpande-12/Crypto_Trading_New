@@ -1,0 +1,16 @@
+[
+  {
+    "timestamp": "2026-01-15T23:56:24.404308",
+    "stage": "signal_backtest",
+    "step": "complete",
+    "status": "info",
+    "data": {
+      "symbol": "BTCUSDT",
+      "initial_capital": 1000.0,
+      "final_capital": 837.6993157603833,
+      "return_pct": -16.23006842396166,
+      "num_trades": 19,
+      "win_rate": 15.789473684210526
+    }
+  }
+]

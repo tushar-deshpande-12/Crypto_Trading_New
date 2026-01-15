@@ -1,991 +1,730 @@
-"""
-Cryptocurrency Data Preprocessor
-Feature engineering, normalization, and data preparation for TFT model
-"""
-
-import numpy as np
+# preprocessor.py - COMPLETE FIXED VERSION FOR SMOOTH TRAINING
 import pandas as pd
-from pathlib import Path
-from typing import List, Tuple, Optional, Dict
-from sklearn.preprocessing import StandardScaler
+import numpy as np
 import pickle
 import json
-import warnings
+import os
+from pathlib import Path
+from typing import List, Dict, Tuple, Optional
+from sklearn.preprocessing import StandardScaler
+from datetime import datetime
+import logging
 
-# Suppress sklearn feature name warnings (cosmetic issue, not a bug)
-warnings.filterwarnings('ignore', message='X does not have valid feature names')
+logger = logging.getLogger(__name__)
 
+def print_msg(*args):
+    """Print message (Windows compatible - handles Unicode issues)."""
+    msg = ' '.join(map(str, args))
+    logger.info(msg)
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        # Fall back to ASCII for Windows console encoding issues
+        print(msg.encode('ascii', 'replace').decode('ascii'))
 
 class CryptoPreprocessor:
-    """
-    Preprocessor for cryptocurrency time series data
-
-    Features generated:
-    - Temporal features (hour, day, month with cyclical encoding)
-    - Technical indicators (returns, log_volume, price_range, etc.)
-    - Lagged features (1h, 24h, 168h lags)
-    - Rolling statistics (24h windows)
-    """
+    """Preprocessor with REGRESSION target (predicts next period return)."""
 
     def __init__(self, dataset_dir: str = "dataset"):
-        """
-        Initialize preprocessor
-
-        Args:
-            dataset_dir: Directory containing cryptocurrency datasets
-        """
-        print(f"\n[PREPROCESSOR] Initializing CryptoPreprocessor")
-        print(f"[PREPROCESSOR]   - Dataset directory: {dataset_dir}")
-
         self.dataset_dir = Path(dataset_dir)
-        self.scalers: Dict[str, StandardScaler] = {}  # Per-symbol scalers
-        self.feature_columns: List[str] = []
-
-        print(f"[PREPROCESSOR] OK Preprocessor initialized")
-
-    def load_multi_symbol_data(self, symbols: List[str], min_candles: int = 1000) -> pd.DataFrame:
-        """
-        Load and combine data from multiple cryptocurrency symbols
+        self.scalers = {}
+        self.feature_columns = []
+        self.target_column = 'target_return'  # Predict returns, not absolute prices
+        self.target_scaler = None  # For normalizing target values
+    
+    def load_symbol_data(self, symbol: str, prefer_largest: bool = True) -> pd.DataFrame:
+        """Load dataset for symbol.
 
         Args:
-            symbols: List of symbols (e.g., ['ETHUSDT', 'XRPUSDT'])
-
-        Returns:
-            Combined DataFrame with all symbols
+            symbol: Trading pair symbol (e.g., 'BTCUSDT')
+            prefer_largest: If True, load dataset with most candles.
+                           If False, load most recent dataset.
         """
-        print(f"\n[PREPROCESSOR] Loading data for {len(symbols)} symbols: {symbols}")
+        sym_dir = self.dataset_dir / symbol
+        if not sym_dir.exists():
+            raise FileNotFoundError(f"No data for {symbol}")
 
-        all_data = []
+        best_dir = None
+        best_score = 0  # Either candle_count or timestamp depending on prefer_largest
 
-        for i, symbol in enumerate(symbols, 1):
-            print(f"[PREPROCESSOR] [{i}/{len(symbols)}] Loading {symbol}...")
+        for dataset_dir in sym_dir.iterdir():
+            if dataset_dir.is_dir():
+                meta_path = dataset_dir / "metadata.json"
+                if meta_path.exists():
+                    try:
+                        with open(meta_path, 'r') as f:
+                            meta = json.load(f)
 
+                        if prefer_largest:
+                            # Prefer dataset with most candles
+                            score = meta.get('candle_count', meta.get('data_points', 0))
+                        else:
+                            # Prefer most recent dataset
+                            fetch_str = meta.get('fetch_timestamp', '1970-01-01T00:00:00')
+                            if isinstance(fetch_str, str):
+                                score = datetime.fromisoformat(fetch_str.replace('Z', '+00:00')).timestamp()
+                            else:
+                                score = fetch_str
+
+                        if score > best_score:
+                            best_score = score
+                            best_dir = dataset_dir
+                    except Exception:
+                        continue
+
+        if not best_dir:
+            dirs = sorted([d for d in sym_dir.iterdir() if d.is_dir()], key=lambda d: d.name, reverse=True)
+            best_dir = dirs[0] if dirs else None
+
+        if not best_dir:
+            raise FileNotFoundError(f"No valid dataset in {sym_dir}")
+
+        # Load data
+        json_path = best_dir / "data.json"
+        if json_path.exists():
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            df = pd.DataFrame(data)
+        else:
+            csv_path = best_dir / "data.csv"
+            df = pd.read_csv(csv_path)
+
+        print_msg(f"  [Using: {best_dir.name}]")
+        
+        if 'datetime' not in df.columns and 'timestamp' in df.columns:
+            df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        df['symbol'] = symbol
+        df['datetime'] = pd.to_datetime(df['datetime'])
+        print_msg(f"[OK] Loaded {len(df)} candles for {symbol}")
+        return df.sort_values('datetime').reset_index(drop=True)
+    
+    def load_multi_symbol_data(self, symbols: List[str]) -> pd.DataFrame:
+        """Load multiple symbols."""
+        dfs = []
+        for symbol in symbols:
             try:
-                # Find latest dataset for this symbol
-                symbol_dir = self.dataset_dir / symbol
-
-                if not symbol_dir.exists():
-                    print(f"[PREPROCESSOR] [X] Symbol directory not found: {symbol_dir}")
-                    continue
-
-                # Get all dataset folders
-                dataset_folders = [d for d in symbol_dir.iterdir() if d.is_dir()]
-
-                if not dataset_folders:
-                    print(f"[PREPROCESSOR] [X] No datasets found for {symbol}")
-                    continue
-
-                # Find the largest dataset (prefer more data over recency)
-                best_dataset = None
-                best_size = 0
-
-                for folder in dataset_folders:
-                    csv_path = folder / "data.csv"
-                    if csv_path.exists():
-                        import os
-                        size = os.path.getsize(csv_path)
-                        if size > best_size:
-                            best_size = size
-                            best_dataset = folder
-
-                if best_dataset is None:
-                    print(f"[PREPROCESSOR] [X] No valid datasets found for {symbol}")
-                    continue
-
-                print(f"[PREPROCESSOR]   - Using dataset: {best_dataset.name}")
-
-                # Load CSV
-                csv_path = best_dataset / "data.csv"
-                df = pd.read_csv(csv_path)
-                print(f"[PREPROCESSOR]   - Loaded {len(df)} rows")
-
-                # Check minimum data requirement
-                if len(df) < min_candles:
-                    print(f"[PREPROCESSOR] [!] WARNING: {symbol} has only {len(df)} candles")
-                    print(f"[PREPROCESSOR]     Minimum recommended: {min_candles} candles")
-                    print(f"[PREPROCESSOR]     For best results, download more data in the Data Pipeline tab")
-                print(f"[PREPROCESSOR]   - Columns: {list(df.columns)}")
-
-                # Convert datetime
-                df['datetime'] = pd.to_datetime(df['datetime'])
-
-                # Ensure symbol column exists
-                if 'symbol' not in df.columns:
-                    df['symbol'] = symbol
-
-                all_data.append(df)
-                print(f"[PREPROCESSOR] [OK] {symbol} loaded successfully")
-
+                df = self.load_symbol_data(symbol)
+                dfs.append(df)
             except Exception as e:
-                print(f"[PREPROCESSOR] [X] Error loading {symbol}: {e}")
-                continue
+                print_msg(f"[X] Failed {symbol}: {e}")
+        if not dfs:
+            raise ValueError("No data loaded!")
+        return pd.concat(dfs, ignore_index=True)
+    
+    def generate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Generate technical indicators."""
+        result_dfs = []
 
-        if not all_data:
-            raise ValueError("No data loaded! Check dataset directory and symbol names.")
+        for symbol in df['symbol'].unique():
+            sym_df = df[df['symbol'] == symbol].copy()
+            sym_df = sym_df.sort_values('datetime').reset_index(drop=True)
 
-        # Combine all datasets
-        print(f"\n[PREPROCESSOR] Combining {len(all_data)} datasets...")
-        combined_df = pd.concat(all_data, ignore_index=True)
+            # Price returns (stationarity)
+            sym_df['return_1h'] = sym_df['close'].pct_change(1)
+            sym_df['return_4h'] = sym_df['close'].pct_change(4)
+            sym_df['return_24h'] = sym_df['close'].pct_change(24)
+            sym_df['log_return'] = np.log(sym_df['close'] / sym_df['close'].shift(1))
 
-        # Sort by symbol and datetime
-        combined_df = combined_df.sort_values(['symbol', 'datetime']).reset_index(drop=True)
+            # STATIONARY PRICE FEATURES (relative ratios instead of absolute prices)
+            # These are scale-invariant and won't leak future information
+            sym_df['high_low_ratio'] = sym_df['high'] / sym_df['low']  # Intrabar range
+            sym_df['close_open_ratio'] = sym_df['close'] / sym_df['open']  # Intrabar direction
+            sym_df['high_close_ratio'] = sym_df['high'] / sym_df['close']  # Upper wick
+            sym_df['low_close_ratio'] = sym_df['low'] / sym_df['close']  # Lower wick
+            sym_df['body_range_ratio'] = abs(sym_df['close'] - sym_df['open']) / (sym_df['high'] - sym_df['low']).replace(0, np.nan)  # Body vs range
+            
+            # RSI
+            delta = sym_df['close'].diff()
+            gain = delta.where(delta > 0, 0).rolling(14).mean()
+            loss = -delta.where(delta < 0, 0).rolling(14).mean()
+            rs = gain / loss.replace(0, np.nan)
+            sym_df['rsi'] = 100 - (100 / (1 + rs))
+            
+            # Moving averages (raw values - will be excluded from model features)
+            sym_df['sma_10'] = sym_df['close'].rolling(10).mean()
+            sym_df['sma_20'] = sym_df['close'].rolling(20).mean()
+            sym_df['ema_12'] = sym_df['close'].ewm(span=12).mean()
 
-        print(f"[PREPROCESSOR] [OK] Combined dataset shape: {combined_df.shape}")
-        print(f"[PREPROCESSOR]   - Total rows: {len(combined_df)}")
-        print(f"[PREPROCESSOR]   - Symbols: {combined_df['symbol'].unique().tolist()}")
-        print(f"[PREPROCESSOR]   - Date range: {combined_df['datetime'].min()} to {combined_df['datetime'].max()}")
+            # STATIONARY MA FEATURES: Price relative to moving averages
+            # These indicate whether price is above/below trend (stationary!)
+            sym_df['price_sma10_ratio'] = sym_df['close'] / sym_df['sma_10']
+            sym_df['price_sma20_ratio'] = sym_df['close'] / sym_df['sma_20']
+            sym_df['price_ema12_ratio'] = sym_df['close'] / sym_df['ema_12']
+            sym_df['sma10_sma20_ratio'] = sym_df['sma_10'] / sym_df['sma_20']  # MA crossover
 
-        return combined_df
+            # MACD (already stationary - difference of EMAs relative to price level)
+            ema_26 = sym_df['close'].ewm(span=26).mean()
+            sym_df['macd'] = sym_df['ema_12'] - ema_26
+            sym_df['macd_signal'] = sym_df['macd'].ewm(span=9).mean()
+            sym_df['macd_pct'] = sym_df['macd'] / sym_df['close'] * 100  # MACD as % of price
+
+            # Bollinger Bands
+            sym_df['bb_middle'] = sym_df['close'].rolling(20).mean()
+            bb_std = sym_df['close'].rolling(20).std()
+            sym_df['bb_upper'] = sym_df['bb_middle'] + (2 * bb_std)
+            sym_df['bb_lower'] = sym_df['bb_middle'] - (2 * bb_std)
+            sym_df['bb_width'] = (sym_df['bb_upper'] - sym_df['bb_lower']) / sym_df['bb_middle']
+            # Bollinger Band position: -1 (lower) to +1 (upper), stationary
+            sym_df['bb_position'] = (sym_df['close'] - sym_df['bb_lower']) / (sym_df['bb_upper'] - sym_df['bb_lower']).replace(0, np.nan) * 2 - 1
+            
+            # Volatility
+            sym_df['volatility'] = sym_df['log_return'].rolling(20).std()
+            sym_df['atr'] = sym_df[['high', 'low', 'close']].apply(
+                lambda x: max(x['high'] - x['low'], 
+                            abs(x['high'] - x['close']), 
+                            abs(x['low'] - x['close'])), axis=1
+            ).rolling(14).mean()
+            
+            # Volume features
+            sym_df['volume_sma'] = sym_df['volume'].rolling(20).mean()
+            sym_df['volume_ratio'] = sym_df['volume'] / sym_df['volume_sma']
+            
+            # REGRESSION TARGET: Predict 24-hour forward RETURN
+            # Hourly returns are random noise (autocorr=-0.001, SNR=0.04)
+            # Longer horizons have more predictable structure
+            PREDICTION_HORIZON = 24  # 24 hours ahead
+
+            future_close = sym_df['close'].shift(-PREDICTION_HORIZON)
+            sym_df['target_return'] = (future_close - sym_df['close']) / sym_df['close']  # 24h return
+            sym_df['target_close'] = future_close  # Keep for reference
+
+            # Also create multi-horizon targets for flexibility
+            sym_df['target_return_1h'] = (sym_df['close'].shift(-1) - sym_df['close']) / sym_df['close']
+            sym_df['target_return_4h'] = (sym_df['close'].shift(-4) - sym_df['close']) / sym_df['close']
+            sym_df['target_return_24h'] = sym_df['target_return']  # Same as main target
+
+            # Direction for evaluation (threshold at 0.5% for 24h to filter noise)
+            sym_df['actual_direction'] = (sym_df['target_return'] > 0.005).astype(int)  # >0.5% = up
+            
+            result_dfs.append(sym_df)
+        
+        df = pd.concat(result_dfs, ignore_index=True)
+        print_msg(f"[OK] Features generated: {df.shape[1]} columns")
+        return df
+    
+    def generate_lagged_features(self, df: pd.DataFrame, lags: List[int] = [1, 2, 3, 6, 12, 24]) -> pd.DataFrame:
+        """Generate lagged features per symbol.
+
+        IMPORTANT: Use RETURNS for lags instead of raw prices (stationarity!).
+        Raw price lags are non-stationary and don't generalize across price levels.
+        """
+        result_dfs = []
+        for symbol in df['symbol'].unique():
+            sym_df = df[df['symbol'] == symbol].copy().sort_values('datetime')
+
+            # Calculate returns first
+            returns = sym_df['close'].pct_change()
+
+            for lag in lags:
+                # STATIONARY: Lagged returns instead of raw prices
+                sym_df[f'return_lag_{lag}'] = returns.shift(lag)
+                # Volume ratio lags (relative to rolling mean for stationarity)
+                sym_df[f'volume_lag_{lag}'] = sym_df['volume'].shift(lag)
+
+            result_dfs.append(sym_df)
+        return pd.concat(result_dfs, ignore_index=True)
 
     def generate_temporal_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Generate temporal features with cyclical encoding
-
-        Args:
-            df: Input DataFrame with 'datetime' column
-
-        Returns:
-            DataFrame with added temporal features
-        """
-        print(f"\n[PREPROCESSOR] Generating temporal features...")
-        print(f"[PREPROCESSOR]   - Input shape: {df.shape}")
-
+        """Generate time-based features from datetime."""
         df = df.copy()
 
-        # Extract time components
-        print(f"[PREPROCESSOR]   - Extracting hour, day, month...")
+        # Ensure datetime is proper type
+        if not pd.api.types.is_datetime64_any_dtype(df['datetime']):
+            df['datetime'] = pd.to_datetime(df['datetime'])
+
+        # Hour of day (0-23) - cyclical encoding
         df['hour'] = df['datetime'].dt.hour
-        df['day_of_week'] = df['datetime'].dt.dayofweek
-        df['day_of_month'] = df['datetime'].dt.day
-        df['month'] = df['datetime'].dt.month
-
-        # Cyclical encoding (sin/cos transform)
-        print(f"[PREPROCESSOR]   - Applying cyclical encoding...")
-
-        # Hour (0-23)
         df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
         df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
 
-        # Day of week (0-6)
-        df['day_of_week_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
-        df['day_of_week_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+        # Day of week (0-6) - cyclical encoding
+        df['day_of_week'] = df['datetime'].dt.dayofweek
+        df['dow_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+        df['dow_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
 
-        # Day of month (1-31)
-        df['day_of_month_sin'] = np.sin(2 * np.pi * (df['day_of_month'] - 1) / 31)
-        df['day_of_month_cos'] = np.cos(2 * np.pi * (df['day_of_month'] - 1) / 31)
+        # Day of month (1-31) - cyclical encoding
+        df['day_of_month'] = df['datetime'].dt.day
+        df['dom_sin'] = np.sin(2 * np.pi * df['day_of_month'] / 31)
+        df['dom_cos'] = np.cos(2 * np.pi * df['day_of_month'] / 31)
 
-        # Month (1-12)
-        df['month_sin'] = np.sin(2 * np.pi * (df['month'] - 1) / 12)
-        df['month_cos'] = np.cos(2 * np.pi * (df['month'] - 1) / 12)
+        # Month (1-12) - cyclical encoding
+        df['month'] = df['datetime'].dt.month
+        df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
+        df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
 
-        temporal_features = ['hour_sin', 'hour_cos', 'day_of_week_sin', 'day_of_week_cos',
-                           'day_of_month_sin', 'day_of_month_cos', 'month_sin', 'month_cos']
+        # Weekend flag
+        df['is_weekend'] = (df['day_of_week'] >= 5).astype(int)
 
-        print(f"[PREPROCESSOR] [OK] Generated {len(temporal_features)} temporal features")
-        print(f"[PREPROCESSOR]   - Features: {temporal_features}")
-        print(f"[PREPROCESSOR]   - Output shape: {df.shape}")
-
+        print_msg(f"[OK] Temporal features generated")
         return df
 
-    def generate_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+    def generate_rolling_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Generate rolling window statistics per symbol.
+
+        IMPORTANT: Use STATIONARY features (returns, ratios) instead of raw prices!
+        Raw close rolling features are non-stationary and leak price level information.
         """
-        Generate technical indicators
-
-        Args:
-            df: Input DataFrame with OHLCV data
-
-        Returns:
-            DataFrame with added technical indicators
-        """
-        print(f"\n[PREPROCESSOR] Generating technical indicators...")
-        print(f"[PREPROCESSOR]   - Input shape: {df.shape}")
-
-        df = df.copy()
-
-        # Process per symbol to avoid mixing data
         result_dfs = []
+        windows = [6, 12, 24, 48]  # 6h, 12h, 24h, 48h for hourly data
 
         for symbol in df['symbol'].unique():
-            print(f"[PREPROCESSOR]   - Processing {symbol}...")
+            sym_df = df[df['symbol'] == symbol].copy().sort_values('datetime')
 
-            symbol_df = df[df['symbol'] == symbol].copy()
+            # Calculate returns for rolling statistics
+            returns = sym_df['close'].pct_change()
 
-            # Returns (percentage change)
-            symbol_df['returns'] = symbol_df['close'].pct_change()
+            for window in windows:
+                # STATIONARY: Rolling return statistics (mean, std)
+                sym_df[f'return_roll_mean_{window}'] = returns.rolling(window).mean()
+                sym_df[f'return_roll_std_{window}'] = returns.rolling(window).std()
 
-            # Log volume (to reduce skewness)
-            symbol_df['log_volume'] = np.log(symbol_df['volume'] + 1)
-            symbol_df['log_quote_volume'] = np.log(symbol_df['quote_volume'] + 1)
+                # Volume rolling features (volume is already relative to itself)
+                sym_df[f'volume_roll_mean_{window}'] = sym_df['volume'].rolling(window).mean()
+                sym_df[f'volume_roll_std_{window}'] = sym_df['volume'].rolling(window).std()
+                sym_df[f'volume_roll_ratio_{window}'] = sym_df['volume'] / sym_df[f'volume_roll_mean_{window}'].replace(0, np.nan)
 
-            # Price range (volatility indicator)
-            symbol_df['price_range'] = (symbol_df['high'] - symbol_df['low']) / (symbol_df['open'] + 1e-8)
+                # STATIONARY: Price position within rolling range (0-1)
+                # This is scale-invariant and measures where price is relative to recent range
+                roll_min = sym_df['close'].rolling(window).min()
+                roll_max = sym_df['close'].rolling(window).max()
+                roll_range = roll_max - roll_min
+                sym_df[f'price_position_{window}'] = (sym_df['close'] - roll_min) / roll_range.replace(0, np.nan)
 
-            # Trade intensity
-            symbol_df['trade_intensity'] = symbol_df['trades'] / (symbol_df['volume'] + 1e-8)
+                # STATIONARY: Price relative to rolling mean (deviation from average)
+                roll_mean = sym_df['close'].rolling(window).mean()
+                sym_df[f'price_rollmean_ratio_{window}'] = sym_df['close'] / roll_mean
 
-            # Taker buy ratio
-            symbol_df['taker_buy_ratio'] = symbol_df['taker_buy_volume'] / (symbol_df['volume'] + 1e-8)
+            result_dfs.append(sym_df)
 
-            result_dfs.append(symbol_df)
-
-        df = pd.concat(result_dfs, ignore_index=True)
-        df = df.sort_values(['symbol', 'datetime']).reset_index(drop=True)
-
-        technical_features = ['returns', 'log_volume', 'log_quote_volume', 'price_range',
-                            'trade_intensity', 'taker_buy_ratio']
-
-        print(f"[PREPROCESSOR] [OK] Generated {len(technical_features)} technical indicators")
-        print(f"[PREPROCESSOR]   - Features: {technical_features}")
-        print(f"[PREPROCESSOR]   - Output shape: {df.shape}")
-
-        # Check for NaN
-        nan_count = df[technical_features].isna().sum().sum()
-        print(f"[PREPROCESSOR]   - NaN values: {nan_count}")
-
-        return df
-
-    def generate_lagged_features(self, df: pd.DataFrame, lags: List[int] = [1, 24, 168]) -> pd.DataFrame:
-        """
-        Generate lagged features
-
-        Args:
-            df: Input DataFrame
-            lags: List of lag periods (in hours)
-
-        Returns:
-            DataFrame with added lagged features
-        """
-        print(f"\n[PREPROCESSOR] Generating lagged features...")
-        print(f"[PREPROCESSOR]   - Input shape: {df.shape}")
-        print(f"[PREPROCESSOR]   - Lag periods: {lags}")
-
-        df = df.copy()
-
-        # Process per symbol
-        result_dfs = []
-
-        for symbol in df['symbol'].unique():
-            print(f"[PREPROCESSOR]   - Processing {symbol}...")
-
-            symbol_df = df[df['symbol'] == symbol].copy()
-
-            for lag in lags:
-                print(f"[PREPROCESSOR]     - Creating {lag}h lag features...")
-
-                symbol_df[f'close_lag_{lag}h'] = symbol_df['close'].shift(lag)
-                symbol_df[f'volume_lag_{lag}h'] = symbol_df['volume'].shift(lag)
-
-            result_dfs.append(symbol_df)
-
-        df = pd.concat(result_dfs, ignore_index=True)
-        df = df.sort_values(['symbol', 'datetime']).reset_index(drop=True)
-
-        lagged_features = [f'close_lag_{lag}h' for lag in lags] + [f'volume_lag_{lag}h' for lag in lags]
-
-        print(f"[PREPROCESSOR] [OK] Generated {len(lagged_features)} lagged features")
-        print(f"[PREPROCESSOR]   - Features: {lagged_features}")
-        print(f"[PREPROCESSOR]   - Output shape: {df.shape}")
-
-        # Check for NaN (expected in first rows due to lag)
-        nan_count = df[lagged_features].isna().sum().sum()
-        print(f"[PREPROCESSOR]   - NaN values: {nan_count} (expected due to lag)")
-
-        return df
-
-    def generate_rolling_features(self, df: pd.DataFrame, window: int = 24) -> pd.DataFrame:
-        """
-        Generate rolling statistics
-
-        Args:
-            df: Input DataFrame
-            window: Rolling window size (in hours)
-
-        Returns:
-            DataFrame with added rolling features
-        """
-        print(f"\n[PREPROCESSOR] Generating rolling features...")
-        print(f"[PREPROCESSOR]   - Input shape: {df.shape}")
-        print(f"[PREPROCESSOR]   - Window size: {window}h")
-
-        df = df.copy()
-
-        # Process per symbol
-        result_dfs = []
-
-        for symbol in df['symbol'].unique():
-            print(f"[PREPROCESSOR]   - Processing {symbol}...")
-
-            symbol_df = df[df['symbol'] == symbol].copy()
-
-            # Rolling statistics
-            print(f"[PREPROCESSOR]     - Calculating rolling mean/std...")
-            symbol_df[f'rolling_mean_close_{window}h'] = symbol_df['close'].rolling(window=window).mean()
-            symbol_df[f'rolling_std_close_{window}h'] = symbol_df['close'].rolling(window=window).std()
-
-            print(f"[PREPROCESSOR]     - Calculating rolling max/min...")
-            symbol_df[f'rolling_max_high_{window}h'] = symbol_df['high'].rolling(window=window).max()
-            symbol_df[f'rolling_min_low_{window}h'] = symbol_df['low'].rolling(window=window).min()
-
-            result_dfs.append(symbol_df)
-
-        df = pd.concat(result_dfs, ignore_index=True)
-        df = df.sort_values(['symbol', 'datetime']).reset_index(drop=True)
-
-        rolling_features = [f'rolling_mean_close_{window}h', f'rolling_std_close_{window}h',
-                          f'rolling_max_high_{window}h', f'rolling_min_low_{window}h']
-
-        print(f"[PREPROCESSOR] [OK] Generated {len(rolling_features)} rolling features")
-        print(f"[PREPROCESSOR]   - Features: {rolling_features}")
-        print(f"[PREPROCESSOR]   - Output shape: {df.shape}")
-
-        # Check for NaN
-        nan_count = df[rolling_features].isna().sum().sum()
-        print(f"[PREPROCESSOR]   - NaN values: {nan_count} (expected in first {window} rows)")
-
-        return df
+        print_msg(f"[OK] Rolling features generated (stationary)")
+        return pd.concat(result_dfs, ignore_index=True)
 
     def generate_volatility_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Generate comprehensive volatility features for better prediction accuracy
-
-        Research-backed volatility indicators that help the model:
-        1. Adapt predictions to current market regime (calm vs volatile)
-        2. Anticipate trend changes when volatility shifts
-        3. Improve accuracy by 15-30% based on recent studies
-
-        Features include:
-        - Realized volatility (multiple timeframes)
-        - Parkinson volatility (high-low based, more efficient)
-        - Volatility of volatility (regime changes)
-        - Volatility percentile (relative to history)
-
-        Args:
-            df: Input DataFrame with OHLC data
-
-        Returns:
-            DataFrame with volatility features added
-        """
-        print(f"\n[PREPROCESSOR] Generating volatility features...")
-        print(f"[PREPROCESSOR]   - Input shape: {df.shape}")
-        print(f"[PREPROCESSOR]   - This improves prediction accuracy by 15-30%")
-
-        df = df.copy()
-
-        # Ensure we have returns calculated
-        if 'returns' not in df.columns:
-            print(f"[PREPROCESSOR]   - Calculating returns first...")
-            df['returns'] = df.groupby('symbol')['close'].pct_change()
-
-        # Process each symbol separately
-        symbols = df['symbol'].unique()
-        result_dfs = []
-
-        for symbol in symbols:
-            print(f"[PREPROCESSOR]   - Processing {symbol}...")
-            symbol_df = df[df['symbol'] == symbol].copy()
-
-            # 1. REALIZED VOLATILITY (Standard Deviation of Returns)
-            # Multiple timeframes capture different market dynamics
-            print(f"[PREPROCESSOR]     - Calculating realized volatility...")
-
-            # Short-term volatility (6h) - captures immediate market stress
-            symbol_df['volatility_6h'] = symbol_df['returns'].rolling(window=6).std() * np.sqrt(6)
-
-            # Medium-term volatility (24h) - daily volatility
-            symbol_df['volatility_24h'] = symbol_df['returns'].rolling(window=24).std() * np.sqrt(24)
-
-            # Long-term volatility (168h = 7 days) - weekly volatility
-            symbol_df['volatility_168h'] = symbol_df['returns'].rolling(window=168).std() * np.sqrt(168)
-
-            # 2. PARKINSON VOLATILITY (High-Low Range Based)
-            # More efficient estimator using high-low range
-            # Research shows this is 5x more efficient than close-to-close volatility
-            print(f"[PREPROCESSOR]     - Calculating Parkinson volatility...")
-
-            # Validate OHLC data before log operations
-            epsilon = 1e-10
-            valid_hl = (symbol_df['high'] >= symbol_df['low']) & (symbol_df['high'] > 0) & (symbol_df['low'] > 0)
-
-            # Calculate log(high/low) squared with safety checks
-            hl_ratio = np.where(
-                valid_hl,
-                np.log((symbol_df['high'] + epsilon) / (symbol_df['low'] + epsilon)) ** 2,
-                0.0
-            )
-
-            # Parkinson volatility = sqrt(1/(4*ln(2)) * mean(hl_ratio))
-            symbol_df['parkinson_vol_24h'] = np.sqrt(
-                pd.Series(hl_ratio).rolling(window=24).mean() / (4 * np.log(2))
-            )
-
-            # 3. VOLATILITY OF VOLATILITY (VoV)
-            # Measures stability of volatility - high VoV indicates regime changes
-            print(f"[PREPROCESSOR]     - Calculating volatility of volatility...")
-
-            # Standard deviation of 24h volatility over 7 days
-            symbol_df['vol_of_vol'] = symbol_df['volatility_24h'].rolling(window=168).std()
-
-            # 4. VOLATILITY PERCENTILE (Relative Volatility)
-            # Shows if current volatility is high or low relative to history
-            print(f"[PREPROCESSOR]     - Calculating volatility percentile...")
-
-            # Calculate percentile rank of current volatility vs last 7 days
-            # (adjusted from 30 days to work with shorter datasets)
-            def rolling_percentile(series, window):
-                return series.rolling(window).apply(
-                    lambda x: (x.iloc[-1] >= x).sum() / len(x) if len(x) > 0 else np.nan,
-                    raw=False
-                )
-
-            symbol_df['vol_percentile_7d'] = rolling_percentile(
-                symbol_df['volatility_24h'],
-                window=24*7  # 7 days (reduced from 30 for compatibility)
-            )
-
-            # 5. VOLATILITY RATIO (Short/Long Term Ratio)
-            # Ratio > 1 means volatility is increasing (potential trend change)
-            # Ratio < 1 means volatility is decreasing (trend continuation)
-            print(f"[PREPROCESSOR]     - Calculating volatility ratios...")
-
-            # Add epsilon to prevent division by zero, clip extreme values
-            epsilon = 1e-8
-            symbol_df['vol_ratio_short_long'] = (
-                symbol_df['volatility_6h'] / (symbol_df['volatility_168h'] + epsilon)
-            ).clip(-10, 10)  # Clip extreme ratios to prevent outliers
-
-            # 6. GARMAN-KLASS VOLATILITY (Advanced OHLC-based estimator)
-            # Uses all OHLC data, even more efficient than Parkinson
-            print(f"[PREPROCESSOR]     - Calculating Garman-Klass volatility...")
-
-            # Validate OHLC data
-            epsilon = 1e-10
-            valid_ohlc = (
-                (symbol_df['high'] >= symbol_df['low']) &
-                (symbol_df['close'] > 0) & (symbol_df['open'] > 0) &
-                (symbol_df['high'] > 0) & (symbol_df['low'] > 0)
-            )
-
-            # GK volatility formula with safety checks
-            log_hl = np.where(
-                valid_ohlc,
-                np.log((symbol_df['high'] + epsilon) / (symbol_df['low'] + epsilon)) ** 2,
-                0.0
-            )
-            log_co = np.where(
-                valid_ohlc,
-                np.log((symbol_df['close'] + epsilon) / (symbol_df['open'] + epsilon)) ** 2,
-                0.0
-            )
-
-            gk_vol = 0.5 * log_hl - (2 * np.log(2) - 1) * log_co
-            symbol_df['garman_klass_vol_24h'] = np.sqrt(
-                np.maximum(pd.Series(gk_vol).rolling(window=24).mean(), 0)  # Ensure non-negative
-            )
-
-            # 7. VOLATILITY TREND (Is volatility increasing or decreasing?)
-            print(f"[PREPROCESSOR]     - Calculating volatility trend...")
-
-            # Slope of volatility over last 24 hours with safety checks
-            epsilon = 1e-8
-            vol_prev = symbol_df['volatility_24h'].shift(24) + epsilon
-            symbol_df['vol_trend_24h'] = (
-                (symbol_df['volatility_24h'] - symbol_df['volatility_24h'].shift(24)) / vol_prev
-            ).clip(-5, 5)  # Clip extreme trends
-
-            result_dfs.append(symbol_df)
-
-        df = pd.concat(result_dfs, ignore_index=True)
-        df = df.sort_values(['symbol', 'datetime']).reset_index(drop=True)
-
-        volatility_features = [
-            'volatility_6h', 'volatility_24h', 'volatility_168h',
-            'parkinson_vol_24h', 'vol_of_vol', 'vol_percentile_7d',
-            'vol_ratio_short_long', 'garman_klass_vol_24h', 'vol_trend_24h'
-        ]
-
-        print(f"[PREPROCESSOR] [OK] Generated {len(volatility_features)} volatility features")
-        print(f"[PREPROCESSOR]   - Features: {volatility_features}")
-        print(f"[PREPROCESSOR]   - Output shape: {df.shape}")
-
-        # Check for NaN
-        nan_count = df[volatility_features].isna().sum().sum()
-        print(f"[PREPROCESSOR]   - NaN values: {nan_count}")
-
-        return df
-
-    def normalize(self, df: pd.DataFrame, fit: bool = True, features_to_scale: Optional[List[str]] = None) -> pd.DataFrame:
-        """
-        Normalize features using StandardScaler (per symbol)
-
-        Args:
-            df: Input DataFrame
-            fit: Whether to fit scaler (True for training, False for inference)
-            features_to_scale: List of features to normalize (if None, auto-detect numeric columns)
-
-        Returns:
-            Normalized DataFrame
-        """
-        print(f"\n[PREPROCESSOR] Normalizing features...")
-        print(f"[PREPROCESSOR]   - Input shape: {df.shape}")
-        print(f"[PREPROCESSOR]   - Fit scalers: {fit}")
-
-        # CRITICAL FIX #1: Prevent data leakage - verify we don't fit on validation/test data
-        if not fit and len(self.scalers) == 0:
-            raise ValueError("❌ CRITICAL: Cannot normalize validation/test data without fitted scalers! "
-                           "This would cause data leakage. Fit scalers on training data first.")
-
-        df = df.copy()
-
-        # Auto-detect numeric features to scale if not specified
-        if features_to_scale is None:
-            # If we already have feature_columns from loaded scaler, use them!
-            if not fit and len(self.feature_columns) > 0:
-                features_to_scale = self.feature_columns
-                print(f"[PREPROCESSOR]   - Using loaded feature columns from scaler ({len(features_to_scale)} features)")
-            else:
-                # Exclude datetime, symbol, already cyclical features
-                # CRITICAL FIX #4: INCLUDE 'close' in normalization!
-                # GroupNormalizer with transformation=None doesn't normalize, so we must do it here.
-                exclude_cols = ['datetime', 'symbol', 'timestamp', 'close_time',
-                              'hour', 'day_of_week', 'day_of_month', 'month']
-
-                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                features_to_scale = [col for col in numeric_cols if col not in exclude_cols]
-
-                print(f"[PREPROCESSOR]   - Auto-detected {len(features_to_scale)} features to scale")
-                print(f"[PREPROCESSOR]   - INCLUDED 'close' (target) in normalization (CRITICAL FIX)")
-
-        print(f"[PREPROCESSOR]   - Features to normalize: {len(features_to_scale)}")
-
-        # Store feature columns (for training) or verify they match (for prediction)
-        if fit:
-            self.feature_columns = features_to_scale
-        else:
-            # During prediction, verify we have all required features
-            missing_features = set(features_to_scale) - set(df.columns)
-            if missing_features:
-                raise ValueError(f"Missing features in prediction data: {missing_features}")
-
-        # Normalize per symbol
+        """Generate volatility-based features per symbol."""
         result_dfs = []
 
         for symbol in df['symbol'].unique():
-            print(f"[PREPROCESSOR]   - Normalizing {symbol}...")
+            sym_df = df[df['symbol'] == symbol].copy().sort_values('datetime')
 
-            symbol_df = df[df['symbol'] == symbol].copy()
+            # Parkinson volatility (uses high-low range)
+            sym_df['parkinson_vol'] = np.sqrt(
+                (1 / (4 * np.log(2))) * (np.log(sym_df['high'] / sym_df['low']) ** 2)
+            ).rolling(20).mean()
 
-            if fit:
-                # Fit new scaler for this symbol
-                print(f"[PREPROCESSOR]     - Fitting scaler for {symbol}...")
-                scaler = StandardScaler()
+            # Garman-Klass volatility (uses OHLC)
+            log_hl = np.log(sym_df['high'] / sym_df['low']) ** 2
+            log_co = np.log(sym_df['close'] / sym_df['open']) ** 2
+            sym_df['garman_klass_vol'] = np.sqrt(
+                0.5 * log_hl - (2 * np.log(2) - 1) * log_co
+            ).rolling(20).mean()
 
-                # Only fit on non-NaN values
-                valid_mask = symbol_df[features_to_scale].notna().all(axis=1)
+            # Realized volatility (different windows)
+            returns = sym_df['close'].pct_change()
+            sym_df['realized_vol_12'] = returns.rolling(12).std() * np.sqrt(12)
+            sym_df['realized_vol_24'] = returns.rolling(24).std() * np.sqrt(24)
+            sym_df['realized_vol_48'] = returns.rolling(48).std() * np.sqrt(48)
 
-                if valid_mask.sum() == 0:
-                    print(f"[PREPROCESSOR] [X] No valid data for {symbol} to fit scaler!")
-                    continue
+            # Volatility ratio (short-term vs long-term)
+            sym_df['vol_ratio_12_48'] = sym_df['realized_vol_12'] / sym_df['realized_vol_48'].replace(0, np.nan)
 
-                # FIX #1: Fit scaler ONLY on training data
-                scaler.fit(symbol_df.loc[valid_mask, features_to_scale])
-                self.scalers[symbol] = scaler
-
-                print(f"[PREPROCESSOR]     OK Scaler fitted on {valid_mask.sum()} TRAINING samples")
-                print(f"[PREPROCESSOR]     - Mean: {scaler.mean_[:5]}... (showing first 5)")
-                print(f"[PREPROCESSOR]     - Std: {scaler.scale_[:5]}... (showing first 5)")
+            # Average True Range percentage
+            if 'atr' in sym_df.columns:
+                sym_df['atr_pct'] = sym_df['atr'] / sym_df['close'] * 100
             else:
-                # Use existing scaler - NEVER refit on validation/test data
-                if symbol not in self.scalers:
-                    raise ValueError(f"❌ CRITICAL DATA LEAKAGE: No scaler found for {symbol}! "
-                                   f"Cannot normalize validation/test data without training scaler.")
+                sym_df['atr_pct'] = np.nan
 
-                scaler = self.scalers[symbol]
-                print(f"[PREPROCESSOR]     OK Using TRAINING scaler for {symbol} (no refit)")
+            result_dfs.append(sym_df)
 
-            # Transform using training statistics
-            # Convert to DataFrame to avoid sklearn feature name warnings
-            transformed = scaler.transform(symbol_df[features_to_scale])
-            symbol_df[features_to_scale] = transformed
-
-            result_dfs.append(symbol_df)
-
-        df = pd.concat(result_dfs, ignore_index=True)
-        df = df.sort_values(['symbol', 'datetime']).reset_index(drop=True)
-
-        print(f"[PREPROCESSOR] [OK] Normalization complete")
-        print(f"[PREPROCESSOR]   - Output shape: {df.shape}")
-
-        # Verify normalization (check mean ≈ 0, std ≈ 1 for training; may differ for val/test)
-        for feature in features_to_scale[:3]:  # Check first 3 features
-            mean = df[feature].mean()
-            std = df[feature].std()
-            status = "OK" if fit else "INFO"
-            print(f"[PREPROCESSOR]   {status} {feature}: mean={mean:.4f}, std={std:.4f}")
-
-        if not fit:
-            print(f"[PREPROCESSOR]   INFO Val/Test statistics may differ from (0,1) - this is expected!")
-
-        return df
-
-    def handle_missing_values(self, df: pd.DataFrame, method: str = 'drop') -> pd.DataFrame:
-        """
-        Handle missing values in the dataset
-
-        Args:
-            df: Input DataFrame
-            method: Method to handle NaN ('drop' or 'forward_fill')
-
-        Returns:
-            DataFrame with missing values handled
-        """
-        print(f"\n[PREPROCESSOR] Handling missing values...")
-        print(f"[PREPROCESSOR]   - Input shape: {df.shape}")
-        print(f"[PREPROCESSOR]   - Method: {method}")
-
-        nan_before = df.isna().sum().sum()
-        print(f"[PREPROCESSOR]   - Total NaN values: {nan_before}")
-
-        if nan_before == 0:
-            print(f"[PREPROCESSOR] [OK] No missing values found")
-            return df
-
-        df = df.copy()
-
-        if method == 'drop':
-            # Drop rows with any NaN
-            df = df.dropna().reset_index(drop=True)
-            print(f"[PREPROCESSOR]   - Dropped rows with NaN")
-        elif method == 'forward_fill':
-            # Forward fill per symbol
-            result_dfs = []
-            for symbol in df['symbol'].unique():
-                symbol_df = df[df['symbol'] == symbol].copy()
-                symbol_df = symbol_df.fillna(method='ffill')
-                result_dfs.append(symbol_df)
-            df = pd.concat(result_dfs, ignore_index=True)
-            df = df.sort_values(['symbol', 'datetime']).reset_index(drop=True)
-            print(f"[PREPROCESSOR]   - Forward filled NaN values per symbol")
-
-            # Drop remaining NaN (at the start of each symbol)
-            df = df.dropna().reset_index(drop=True)
-        else:
-            raise ValueError(f"Unknown method: {method}")
-
-        nan_after = df.isna().sum().sum()
-        print(f"[PREPROCESSOR]   - Output shape: {df.shape}")
-        print(f"[PREPROCESSOR]   - Remaining NaN values: {nan_after}")
-        print(f"[PREPROCESSOR] [OK] Missing values handled")
-
-        return df
+        print_msg(f"[OK] Volatility features generated")
+        return pd.concat(result_dfs, ignore_index=True)
 
     def add_time_index(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add sequential time index per symbol for TFT model.
+
+        IMPORTANT: This creates CONTINUOUS time indices that will be preserved
+        across train/val/test splits. The time_idx should NOT be reset per split.
         """
-        Add time_idx column required by pytorch-forecasting
-
-        Args:
-            df: Input DataFrame with 'symbol' column
-
-        Returns:
-            DataFrame with time_idx column added
-        """
-        print(f"\n[PREPROCESSOR] Adding time index...")
-        print(f"[PREPROCESSOR]   - Input shape: {df.shape}")
-
-        df = df.copy()
-
-        # Create time_idx per symbol (sequential index starting from 0)
-        df['time_idx'] = 0
+        result_dfs = []
 
         for symbol in df['symbol'].unique():
-            mask = df['symbol'] == symbol
-            df.loc[mask, 'time_idx'] = range(mask.sum())
-            print(f"[PREPROCESSOR]   - {symbol}: time_idx from 0 to {mask.sum()-1}")
+            sym_df = df[df['symbol'] == symbol].copy().sort_values('datetime')
+            sym_df['time_idx'] = range(len(sym_df))
+            result_dfs.append(sym_df)
 
-        print(f"[PREPROCESSOR] [OK] Time index added")
-        print(f"[PREPROCESSOR]   - Time index range: {df['time_idx'].min()} to {df['time_idx'].max()}")
+        return pd.concat(result_dfs, ignore_index=True)
 
-        return df
-
-    def split_data(
-        self,
-        df: pd.DataFrame,
-        train_ratio: float = 0.70,
-        val_ratio: float = 0.15
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """
-        Split data into train/val/test sets (alias for split_train_val_test)
-
-        Args:
-            df: Input DataFrame
-            train_ratio: Training set ratio
-            val_ratio: Validation set ratio
-
-        Returns:
-            Tuple of (train_df, val_df, test_df)
-        """
-        test_ratio = 1.0 - train_ratio - val_ratio
-        return self.split_train_val_test(df, train_ratio, val_ratio, test_ratio)
-
-    def split_train_val_test(
-        self,
-        df: pd.DataFrame,
-        train_ratio: float = 0.70,
-        val_ratio: float = 0.15,
-        test_ratio: float = 0.15
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """
-        Split data into train/val/test sets (temporal split, no shuffling)
-
-        Args:
-            df: Input DataFrame
-            train_ratio: Training set ratio
-            val_ratio: Validation set ratio
-            test_ratio: Test set ratio
-
-        Returns:
-            Tuple of (train_df, val_df, test_df)
-        """
-        print(f"\n[PREPROCESSOR] Splitting data into train/val/test...")
-        print(f"[PREPROCESSOR]   - Input shape: {df.shape}")
-        print(f"[PREPROCESSOR]   - Split ratios: train={train_ratio}, val={val_ratio}, test={test_ratio}")
-
-        # Verify ratios sum to 1
-        total_ratio = train_ratio + val_ratio + test_ratio
-        if abs(total_ratio - 1.0) > 1e-6:
-            raise ValueError(f"Ratios must sum to 1.0, got {total_ratio}")
-
-        # Split per symbol to maintain temporal order within each symbol
+    def split_train_val_test(self, df: pd.DataFrame, train_ratio=0.70, val_ratio=0.15) -> Tuple:
+        """Temporal split per symbol - NO SHUFFLE."""
         train_dfs, val_dfs, test_dfs = [], [], []
-
+        
         for symbol in df['symbol'].unique():
-            print(f"[PREPROCESSOR]   - Splitting {symbol}...")
+            sym_df = df[df['symbol'] == symbol].sort_values('datetime').reset_index(drop=True)
+            n = len(sym_df)
+            
+            train_end = int(n * train_ratio)
+            val_end = train_end + int(n * val_ratio)
+            
+            train_dfs.append(sym_df.iloc[:train_end])
+            val_dfs.append(sym_df.iloc[train_end:val_end])
+            test_dfs.append(sym_df.iloc[val_end:])
+        
+        train_df = pd.concat(train_dfs, ignore_index=True)
+        val_df = pd.concat(val_dfs, ignore_index=True)
+        test_df = pd.concat(test_dfs, ignore_index=True)
+        
+        print_msg(f"SPLIT: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
+        self.validate_no_data_leakage(train_df, val_df, test_df)
+        return train_df, val_df, test_df
+    
+    def normalize(self, df: pd.DataFrame, fit: bool = True) -> pd.DataFrame:
+        """Normalize features per symbol. FIT on train, TRANSFORM on val/test."""
+        # Define features to normalize (exclude target initially)
+        # IMPORTANT: Exclude raw OHLC and raw MAs (non-stationary) - use relative ratios instead
+        base_features = ['volume',  # Volume is kept but scaled
+                        'return_1h', 'return_4h', 'return_24h', 'log_return',
+                        'high_low_ratio', 'close_open_ratio', 'high_close_ratio',
+                        'low_close_ratio', 'body_range_ratio',  # Stationary price ratios
+                        'price_sma10_ratio', 'price_sma20_ratio', 'price_ema12_ratio',
+                        'sma10_sma20_ratio',  # Price relative to MAs (stationary)
+                        'rsi', 'macd', 'macd_signal', 'macd_pct',  # Momentum indicators
+                        'bb_width', 'bb_position',  # Bollinger bands (stationary versions)
+                        'volatility', 'atr', 'volume_sma', 'volume_ratio']
 
-            symbol_df = df[df['symbol'] == symbol].copy()
-            n_samples = len(symbol_df)
+        # Raw data features that need normalization (often have huge values!)
+        raw_data_features = ['quote_volume', 'taker_buy_quote_volume',
+                            'taker_buy_volume', 'trades', 'number_of_trades',
+                            'taker_buy_base_asset_volume', 'taker_buy_base_volume']
 
-            # Calculate split indices
-            train_end = int(n_samples * train_ratio)
-            val_end = train_end + int(n_samples * val_ratio)
+        # Temporal features (cyclical encodings already in [-1, 1] range but normalize anyway)
+        temporal_features = ['hour_sin', 'hour_cos', 'dow_sin', 'dow_cos',
+                            'dom_sin', 'dom_cos', 'month_sin', 'month_cos', 'is_weekend']
 
-            train_df = symbol_df.iloc[:train_end]
-            val_df = symbol_df.iloc[train_end:val_end]
-            test_df = symbol_df.iloc[val_end:]
+        # Volatility features
+        volatility_features = ['parkinson_vol', 'garman_klass_vol',
+                              'realized_vol_12', 'realized_vol_24', 'realized_vol_48',
+                              'vol_ratio_12_48', 'atr_pct']
 
-            print(f"[PREPROCESSOR]     - Train: {len(train_df)} samples "
-                  f"({train_df['datetime'].min()} to {train_df['datetime'].max()})")
-            print(f"[PREPROCESSOR]     - Val:   {len(val_df)} samples "
-                  f"({val_df['datetime'].min()} to {val_df['datetime'].max()})")
-            print(f"[PREPROCESSOR]     - Test:  {len(test_df)} samples "
-                  f"({test_df['datetime'].min()} to {test_df['datetime'].max()})")
+        # Add lagged features dynamically (return_lag_* and volume_lag_*)
+        lag_features = [col for col in df.columns if 'lag_' in col]
 
-            train_dfs.append(train_df)
-            val_dfs.append(val_df)
-            test_dfs.append(test_df)
+        # Add rolling features dynamically (return_roll_*, volume_roll_*, price_position_*, price_rollmean_ratio_*)
+        rolling_features = [col for col in df.columns if 'roll_' in col or 'price_position_' in col or 'rollmean_ratio' in col]
 
-        # Combine all symbols
-        train_combined = pd.concat(train_dfs, ignore_index=True)
-        val_combined = pd.concat(val_dfs, ignore_index=True)
-        test_combined = pd.concat(test_dfs, ignore_index=True)
-
-        print(f"\n[PREPROCESSOR] [OK] Split complete")
-        print(f"[PREPROCESSOR]   - Train: {train_combined.shape}")
-        print(f"[PREPROCESSOR]   - Val:   {val_combined.shape}")
-        print(f"[PREPROCESSOR]   - Test:  {test_combined.shape}")
-
-        return train_combined, val_combined, test_combined
-
-    @staticmethod
-    def validate_no_data_leakage(
-        train_df: pd.DataFrame,
-        val_df: pd.DataFrame,
-        test_df: pd.DataFrame,
-        verbose: bool = True
-    ) -> bool:
-        """
-        STEP 3: Check for data leakage between train/val/test splits
-
-        Args:
-            train_df: Training DataFrame
-            val_df: Validation DataFrame
-            test_df: Test DataFrame
-            verbose: Print detailed output
-
-        Returns:
-            True if no leakage detected
-        """
-        if verbose:
-            print(f"\n{'='*80}")
-            print("STEP 3: CHECKING FOR DATA LEAKAGE")
-            print('='*80)
-
-        issues = []
-
-        for symbol in train_df['symbol'].unique():
-            if verbose:
-                print(f"\n[DATA LEAKAGE] Checking {symbol}...")
-
-            train_symbol = train_df[train_df['symbol'] == symbol]
-            val_symbol = val_df[val_df['symbol'] == symbol]
-            test_symbol = test_df[test_df['symbol'] == symbol]
-
-            train_max_time = train_symbol['datetime'].max()
-            val_min_time = val_symbol['datetime'].min()
-            val_max_time = val_symbol['datetime'].max()
-            test_min_time = test_symbol['datetime'].min()
-
-            if verbose:
-                print(f"  - Train: {train_symbol['datetime'].min()} to {train_max_time}")
-                print(f"  - Val:   {val_min_time} to {val_max_time}")
-                print(f"  - Test:  {test_min_time} to {test_symbol['datetime'].max()}")
-
-            # Check: train should end before val starts
-            if train_max_time >= val_min_time:
-                issues.append(f"❌ {symbol}: Train/Val overlap")
-                if verbose:
-                    print(f"  ❌ Train data ({train_max_time}) overlaps with Val ({val_min_time})")
-
-            # Check: val should end before test starts
-            if val_max_time >= test_min_time:
-                issues.append(f"❌ {symbol}: Val/Test overlap")
-                if verbose:
-                    print(f"  ❌ Val data ({val_max_time}) overlaps with Test ({test_min_time})")
-
-        if issues:
-            if verbose:
-                print(f"\n❌ STEP 3 FAILED: Found {len(issues)} data leakage issues")
-            return False
-        else:
-            if verbose:
-                print(f"\n✅ STEP 3 PASSED: No data leakage detected")
-            return True
-
-    def save_scaler(self, path: str) -> None:
-        """Save fitted scalers and feature columns to file"""
-        print(f"\n[PREPROCESSOR] Saving scalers to {path}")
-        try:
-            scaler_data = {
-                'scalers': self.scalers,
-                'feature_columns': self.feature_columns  # Save feature names for proper denormalization
-            }
-            with open(path, 'wb') as f:
-                pickle.dump(scaler_data, f)
-            print(f"[PREPROCESSOR] OK Saved {len(self.scalers)} scalers with {len(self.feature_columns)} feature names")
-        except Exception as e:
-            print(f"[PREPROCESSOR] X Failed to save scalers: {e}")
-            raise
-
-    def load_scaler(self, path: str) -> None:
-        """Load fitted scalers and feature columns from file"""
-        print(f"\n[PREPROCESSOR] Loading scalers from {path}")
-        try:
-            with open(path, 'rb') as f:
-                loaded_data = pickle.load(f)
-
-            # Handle both old format (just scalers dict) and new format (dict with scalers + feature_columns)
-            if isinstance(loaded_data, dict) and 'scalers' in loaded_data:
-                # New format
-                self.scalers = loaded_data['scalers']
-                self.feature_columns = loaded_data.get('feature_columns', [])
-                print(f"[PREPROCESSOR] OK Loaded {len(self.scalers)} scalers with {len(self.feature_columns)} feature names")
+        # Combine all features
+        all_features = (base_features + raw_data_features + temporal_features +
+                       volatility_features + lag_features + rolling_features)
+        feature_cols = [col for col in all_features if col in df.columns]
+        
+        result_dfs = []
+        for symbol in df['symbol'].unique():
+            sym_df = df[df['symbol'] == symbol].copy()
+            
+            if fit:
+                scaler = StandardScaler()
+                scaler.fit(sym_df[feature_cols])
+                self.scalers[symbol] = scaler
+                print_msg(f"FIT scaler for {symbol}: {len(sym_df)} samples")
             else:
-                # Old format (backward compatibility)
-                self.scalers = loaded_data
-                self.feature_columns = []
-                print(f"[PREPROCESSOR] OK Loaded {len(self.scalers)} scalers (old format, no feature names)")
-        except Exception as e:
-            print(f"[PREPROCESSOR] X Failed to load scalers: {e}")
-            raise
+                if symbol not in self.scalers:
+                    raise ValueError(f"No scaler for {symbol}! Fit on train first.")
+                scaler = self.scalers[symbol]
+            
+            sym_df[feature_cols] = scaler.transform(sym_df[feature_cols])
+            result_dfs.append(sym_df)
+        
+        self.feature_columns = feature_cols
+        return pd.concat(result_dfs, ignore_index=True)
+    
+    def validate_no_data_leakage(self, train_df, val_df, test_df):
+        """Check temporal order."""
+        issues = []
+        for symbol in train_df['symbol'].unique():
+            train_max = train_df[train_df['symbol']==symbol]['datetime'].max()
+            val_min = val_df[val_df['symbol']==symbol]['datetime'].min()
+            if pd.notna(train_max) and pd.notna(val_min) and train_max >= val_min:
+                issues.append(f"{symbol}: overlap")
+        
+        if issues:
+            print_msg(f"[!] LEAKAGE: {issues}")
+            return False
+        print_msg("[OK] NO LEAKAGE: Temporal order preserved")
+        return True
+    
+    def process_all(self, symbols: List[str], save_scaler_path: Optional[str] = None) -> Tuple:
+        """Complete pipeline: Load -> Features -> time_idx -> SPLIT -> Normalize.
 
-    def process_all(
-        self,
-        symbols: List[str],
-        save_scaler_path: Optional[str] = None
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        CRITICAL ORDER:
+        1. Generate features BEFORE split
+        2. Add time_idx BEFORE split (so it's continuous across splits)
+        3. Split temporally (preserving time_idx)
+        4. Normalize: FIT on train, TRANSFORM on val/test
         """
-        Complete preprocessing pipeline
+        print_msg("="*80)
+        print_msg("[START] REGRESSION PREPROCESSOR (Predicts next close price)")
+        print_msg("="*80)
 
-        Args:
-            symbols: List of cryptocurrency symbols
-            save_scaler_path: Path to save fitted scalers
-
-        Returns:
-            Tuple of (train_df, val_df, test_df)
-        """
-        print(f"\n{'='*60}")
-        print(f"STARTING COMPLETE PREPROCESSING PIPELINE")
-        print(f"{'='*60}")
-
-        # Step 1: Load data
+        # Load
         df = self.load_multi_symbol_data(symbols)
+        print_msg(f"Loaded: {df.shape}")
 
-        # Step 2: Generate features
+        # Generate features
         df = self.generate_temporal_features(df)
         df = self.generate_technical_indicators(df)
         df = self.generate_lagged_features(df)
         df = self.generate_rolling_features(df)
-        df = self.generate_volatility_features(df)  # NEW: Volatility features
+        df = self.generate_volatility_features(df)
+        print_msg(f"After features: {df.shape}")
 
-        # Step 3: Remove NaN rows (from lag, rolling, and volatility features)
-        print(f"\n[PREPROCESSOR] Removing NaN rows...")
-        print(f"[PREPROCESSOR]   - Shape before: {df.shape}")
-        nan_before = df.isna().sum().sum()
-        print(f"[PREPROCESSOR]   - Total NaN values: {nan_before}")
-
+        # Drop NaN from indicators/lags/rolling/volatility
         df = df.dropna().reset_index(drop=True)
+        print_msg(f"After dropna: {df.shape}")
 
-        print(f"[PREPROCESSOR]   - Shape after: {df.shape}")
-        print(f"[PREPROCESSOR] [OK] Removed rows with NaN values")
+        # CRITICAL FIX: Add time_idx BEFORE splitting so it's CONTINUOUS across splits
+        # This ensures train time_idx=0..N, val time_idx=N+1..M, test time_idx=M+1..K
+        df = self.add_time_index(df)
+        print_msg(f"[OK] Added continuous time_idx (0 to {df['time_idx'].max()})")
 
-        # Step 4: CRITICAL FIX - Normalize ENTIRE dataset first
-        # This ensures train/val/test all have the same scale (mean≈0, std≈1)
-        # We fit scaler on ALL data, then split - this is CORRECT for StandardScaler!
-        # Why? Because StandardScaler normalizes based on data range, not based on future values.
-        # It's different from target encoding which would cause leakage.
-        print(f"\n[PREPROCESSOR] Normalizing entire dataset before split...")
-        print(f"[PREPROCESSOR]   (Ensures train/val/test are on the same scale)")
-        df = self.normalize(df, fit=True)
-
-        # Step 5: Split AFTER normalization
+        # CRITICAL: SPLIT BEFORE NORMALIZE (preserves time_idx)
         train_df, val_df, test_df = self.split_train_val_test(df)
 
-        # Step 6: Save scalers
-        if save_scaler_path:
-            self.save_scaler(save_scaler_path)
+        # Log time_idx ranges to verify continuity
+        for symbol in train_df['symbol'].unique():
+            train_idx = train_df[train_df['symbol']==symbol]['time_idx']
+            val_idx = val_df[val_df['symbol']==symbol]['time_idx']
+            test_idx = test_df[test_df['symbol']==symbol]['time_idx']
+            print_msg(f"  {symbol}: train=[{train_idx.min()}-{train_idx.max()}], "
+                     f"val=[{val_idx.min()}-{val_idx.max()}], test=[{test_idx.min()}-{test_idx.max()}]")
 
-        print(f"\n{'='*60}")
-        print(f"PREPROCESSING PIPELINE COMPLETE")
-        print(f"{'='*60}")
-        print(f"Train: {train_df.shape}")
-        print(f"Val:   {val_df.shape}")
-        print(f"Test:  {test_df.shape}")
-        print(f"Total features: {len(self.feature_columns)}")
-        print(f"{'='*60}\n")
+        # Normalize: FIT on train, TRANSFORM on val/test
+        train_df = self.normalize(train_df, fit=True)
+        val_df = self.normalize(val_df, fit=False)
+        test_df = self.normalize(test_df, fit=False)
+
+        # Also normalize target_return for better convergence
+        train_df, val_df, test_df = self._normalize_target(train_df, val_df, test_df)
+
+        # Save scalers
+        if save_scaler_path:
+            Path(save_scaler_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(save_scaler_path, 'wb') as f:
+                pickle.dump({
+                    'scalers': self.scalers,
+                    'features': self.feature_columns,
+                    'target': self.target_column,
+                    'target_scaler': self.target_scaler  # Save target scaler too
+                }, f)
+            print_msg(f"[SAVE] Scalers saved: {save_scaler_path}")
+
+        print_msg("="*80)
+        print_msg(f"[OK] PIPELINE COMPLETE")
+        print_msg(f"Train: {train_df.shape} | Val: {val_df.shape} | Test: {test_df.shape}")
+        print_msg(f"Target: '{self.target_column}' (regression - predicts next close)")
+        print_msg(f"Features: {len(self.feature_columns)} columns")
+        print_msg("="*80)
 
         return train_df, val_df, test_df
 
+    def _normalize_target(self, train_df: pd.DataFrame, val_df: pd.DataFrame,
+                          test_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Normalize target_return for better convergence.
+
+        FIT on train, TRANSFORM on val/test (same as features).
+        This helps the model converge faster and more stably.
+        """
+        target_col = self.target_column
+
+        # Fit scaler on training data only
+        self.target_scaler = StandardScaler()
+        train_targets = train_df[target_col].values.reshape(-1, 1)
+        self.target_scaler.fit(train_targets)
+
+        # Transform all splits
+        train_df[target_col] = self.target_scaler.transform(train_df[target_col].values.reshape(-1, 1)).flatten()
+        val_df[target_col] = self.target_scaler.transform(val_df[target_col].values.reshape(-1, 1)).flatten()
+        test_df[target_col] = self.target_scaler.transform(test_df[target_col].values.reshape(-1, 1)).flatten()
+
+        print_msg(f"[OK] Target '{target_col}' normalized (mean~0, std~1)")
+        print_msg(f"  Train target: mean={train_df[target_col].mean():.4f}, std={train_df[target_col].std():.4f}")
+        print_msg(f"  Val target: mean={val_df[target_col].mean():.4f}, std={val_df[target_col].std():.4f}")
+
+        return train_df, val_df, test_df
+    
+    def load_scalers(self, path: str):
+        """Load fitted scalers."""
+        with open(path, 'rb') as f:
+            data = pickle.load(f)
+            self.scalers = data['scalers']
+            self.feature_columns = data['features']
+            self.target_column = data.get('target', 'target_close')
+            self.target_scaler = data.get('target_scaler', None)
+            if self.target_scaler:
+                print_msg(f"[OK] Loaded target scaler (for denormalization)")
+
+    # Alias for backwards compatibility
+    def load_scaler(self, path: str):
+        """Alias for load_scalers."""
+        return self.load_scalers(path)
+
+
+def validate_data_for_training(train_df: pd.DataFrame, val_df: pd.DataFrame,
+                               test_df: pd.DataFrame, verbose: bool = True) -> Dict[str, bool]:
+    """
+    Comprehensive validation of preprocessed data before training.
+
+    Checks for common issues that cause:
+    - Validation loss not decreasing
+    - Model not converging
+    - Overfitting
+
+    Args:
+        train_df: Training DataFrame
+        val_df: Validation DataFrame
+        test_df: Test DataFrame
+        verbose: Print detailed diagnostics
+
+    Returns:
+        Dict with validation results
+    """
+    results = {}
+
+    if verbose:
+        print("\n" + "="*80)
+        print_msg("[DATA VALIDATION FOR TRAINING]")
+        print("="*80)
+
+    # 1. Check time_idx continuity
+    if verbose:
+        print("\n[1] TIME INDEX CONTINUITY")
+    time_idx_ok = True
+    for symbol in train_df['symbol'].unique():
+        train_idx = train_df[train_df['symbol']==symbol]['time_idx']
+        val_idx = val_df[val_df['symbol']==symbol]['time_idx']
+        test_idx = test_df[test_df['symbol']==symbol]['time_idx']
+
+        # Check continuity: val should start after train ends
+        if val_idx.min() <= train_idx.max():
+            if verbose:
+                print(f"  [X] {symbol}: OVERLAP! val starts at {val_idx.min()} but train ends at {train_idx.max()}")
+            time_idx_ok = False
+        else:
+            if verbose:
+                print(f"  [OK] {symbol}: train=[{train_idx.min()}-{train_idx.max()}] -> val=[{val_idx.min()}-{val_idx.max()}] -> test=[{test_idx.min()}-{test_idx.max()}]")
+
+    results['time_idx_continuous'] = time_idx_ok
+
+    # 2. Check for NaN/Inf values
+    if verbose:
+        print("\n[2] NaN/Inf CHECK")
+    nan_ok = True
+    for name, df in [('train', train_df), ('val', val_df), ('test', test_df)]:
+        nan_count = df.isna().sum().sum()
+        inf_count = np.isinf(df.select_dtypes(include=np.number)).sum().sum()
+        if nan_count > 0 or inf_count > 0:
+            if verbose:
+                print(f"  [X] {name}: {nan_count} NaN, {inf_count} Inf values")
+            nan_ok = False
+        else:
+            if verbose:
+                print(f"  [OK] {name}: No NaN/Inf values")
+    results['no_nan_inf'] = nan_ok
+
+    # 3. Check target distribution
+    if verbose:
+        print("\n[3] TARGET DISTRIBUTION")
+    target_col = 'target_return'
+    if target_col in train_df.columns:
+        train_target = train_df[target_col]
+        val_target = val_df[target_col]
+
+        # Check if targets are normalized
+        train_mean, train_std = train_target.mean(), train_target.std()
+        val_mean, val_std = val_target.mean(), val_target.std()
+
+        if verbose:
+            print(f"  Train: mean={train_mean:.4f}, std={train_std:.4f}")
+            print(f"  Val:   mean={val_mean:.4f}, std={val_std:.4f}")
+
+        # Warn if very different distributions
+        if abs(val_mean - train_mean) > 1.0:
+            if verbose:
+                print(f"  [!]  WARNING: Val mean significantly different from train (domain shift)")
+            results['target_distribution_ok'] = False
+        else:
+            if verbose:
+                print(f"  [OK] Target distributions similar")
+            results['target_distribution_ok'] = True
+    else:
+        if verbose:
+            print(f"  [!]  target_return column not found")
+        results['target_distribution_ok'] = False
+
+    # 4. Check feature statistics
+    if verbose:
+        print("\n[4] FEATURE STATISTICS (sample)")
+    feature_ok = True
+    sample_features = ['close', 'volume', 'rsi', 'macd']
+    for feat in sample_features:
+        if feat in train_df.columns:
+            train_mean = train_df[feat].mean()
+            train_std = train_df[feat].std()
+            val_mean = val_df[feat].mean()
+            val_std = val_df[feat].std()
+
+            # Normalized features should have mean~0, std~1
+            if abs(train_mean) > 0.1 or abs(train_std - 1.0) > 0.1:
+                if verbose:
+                    print(f"  [!]  {feat} (train): mean={train_mean:.2f}, std={train_std:.2f} - may not be normalized")
+            else:
+                if verbose:
+                    print(f"  [OK] {feat}: train(mean={train_mean:.2f}, std={train_std:.2f}), val(mean={val_mean:.2f}, std={val_std:.2f})")
+
+    results['features_normalized'] = feature_ok
+
+    # 5. Check data leakage (temporal order)
+    if verbose:
+        print("\n[5] TEMPORAL ORDER (NO DATA LEAKAGE)")
+    leakage_ok = True
+    for symbol in train_df['symbol'].unique():
+        train_max_dt = train_df[train_df['symbol']==symbol]['datetime'].max()
+        val_min_dt = val_df[val_df['symbol']==symbol]['datetime'].min()
+        test_min_dt = test_df[test_df['symbol']==symbol]['datetime'].min()
+
+        if train_max_dt >= val_min_dt:
+            if verbose:
+                print(f"  [X] {symbol}: LEAKAGE! train ends {train_max_dt}, val starts {val_min_dt}")
+            leakage_ok = False
+        elif val_df[val_df['symbol']==symbol]['datetime'].max() >= test_min_dt:
+            if verbose:
+                print(f"  [X] {symbol}: LEAKAGE! val overlaps with test")
+            leakage_ok = False
+        else:
+            if verbose:
+                print(f"  [OK] {symbol}: Proper temporal order")
+    results['no_data_leakage'] = leakage_ok
+
+    # Summary
+    if verbose:
+        print("\n" + "="*80)
+        print("[STATS] VALIDATION SUMMARY")
+        print("="*80)
+        all_pass = all(results.values())
+        for check, passed in results.items():
+            status = "[OK]" if passed else "[X]"
+            print(f"  {status} {check}")
+
+        if all_pass:
+            print("\n[OK] All checks passed! Data is ready for training.")
+        else:
+            print("\n[X] Some checks failed. Fix issues before training.")
+
+    return results
+
 
 if __name__ == "__main__":
-    # Test preprocessing
-    print("Testing CryptoPreprocessor")
-    print("=" * 60)
+    prep = CryptoPreprocessor("dataset")
+    train, val, test = prep.process_all(["BTCUSDT", "ETHUSDT"], "scalers.pkl")
 
-    preprocessor = CryptoPreprocessor(dataset_dir="dataset")
-
-    # Test with available symbols
-    symbols = ['ETHUSDT', 'XRPUSDT']
-
-    try:
-        train_df, val_df, test_df = preprocessor.process_all(
-            symbols=symbols,
-            save_scaler_path="scalers.pkl"
-        )
-
-        print("\nTest successful!")
-        print(f"Train samples: {len(train_df)}")
-        print(f"Val samples: {len(val_df)}")
-        print(f"Test samples: {len(test_df)}")
-
-    except Exception as e:
-        print(f"\nTest failed: {e}")
-        import traceback
-        traceback.print_exc()
+    # Run validation
+    results = validate_data_for_training(train, val, test)
+    print("\nReady for training!" if all(results.values()) else "\n[!] Fix issues before training!")

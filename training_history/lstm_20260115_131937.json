@@ -1,0 +1,71 @@
+{
+  "model_name": "lstm",
+  "start_time": "2026-01-15T13:19:37.874679",
+  "end_time": "2026-01-15T13:25:31.133257",
+  "status": "exit",
+  "hyperparameters": {
+    "input_size": 28,
+    "hidden_size": 320,
+    "num_layers": 4,
+    "dropout": 0.1,
+    "prediction_horizon": 1,
+    "learning_rate": 0.0001,
+    "weight_decay": 0.0001,
+    "use_classification": true
+  },
+  "epochs": [
+    {
+      "epoch": 0,
+      "timestamp": "2026-01-15T13:21:57.895222",
+      "metrics": {
+        "lr-AdamW": 9.999999747378752e-05,
+        "train_loss": 0.7285053730010986,
+        "train_class_acc": 0.7179487347602844,
+        "train_dir_acc": 0.6538462042808533,
+        "train_up_acc": 0.7777777910232544,
+        "train_down_acc": 0.5882353186607361,
+        "train_mae": 0.996659517288208,
+        "train_rmse": 1.2309176921844482,
+        "val_loss": 1.3743743896484375,
+        "val_class_acc": 0.42653658986091614,
+        "val_dir_acc": 0.31246453523635864,
+        "val_up_acc": 0.2887638807296753,
+        "val_down_acc": 0.3527126908302307,
+        "val_mae": 0.9378754496574402,
+        "val_rmse": 1.097743272781372
+      },
+      "learning_rate": 0.0001
+    },
+    {
+      "epoch": 1,
+      "timestamp": "2026-01-15T13:24:16.901518",
+      "metrics": {
+        "lr-AdamW": 9.999999747378752e-05,
+        "train_loss": 0.65975022315979,
+        "train_class_acc": 0.6666666865348816,
+        "train_dir_acc": 0.7272727489471436,
+        "train_up_acc": 0.699999988079071,
+        "train_down_acc": 0.75,
+        "train_mae": 0.9061285257339478,
+        "train_rmse": 1.2054020166397095,
+        "val_loss": 1.6215449571609497,
+        "val_class_acc": 0.4311599135398865,
+        "val_dir_acc": 0.28589797019958496,
+        "val_up_acc": 0.23015761375427246,
+        "val_down_acc": 0.3686017692089081,
+        "val_mae": 0.9553214311599731,
+        "val_rmse": 1.124855875968933
+      },
+      "learning_rate": 0.0001
+    }
+  ],
+  "best_epoch": 0,
+  "best_val_loss": 1.3743743896484375,
+  "total_epochs": 2,
+  "interruption_reason": null,
+  "trainer_config": {
+    "max_epochs": 25,
+    "accelerator": "<lightning.pytorch.accelerators.cuda.CUDAAccelerator object at 0x000002D788AD3A10>",
+    "gradient_clip_val": 1.0
+  }
+}

@@ -384,12 +384,16 @@ class MLPanel:
         # Create entry fields for hyperparameters
         self.config_vars = {}
 
+        # OPTIMIZED DEFAULTS for CLASSIFICATION model:
+        # - hidden_size=32: Very simple model to prevent overfitting
+        # - dropout=0.4: High dropout for strong regularization
+        # - learning_rate=0.0005: Slightly higher for classification
         params = [
-            ('Hidden Size', 'hidden_size', 160),
-            ('LSTM Layers', 'lstm_layers', 2),
+            ('Hidden Size', 'hidden_size', 32),
+            ('LSTM Layers', 'lstm_layers', 1),
             ('Attention Heads', 'attention_head_size', 4),
-            ('Dropout', 'dropout', 0.15),
-            ('Batch Size', 'batch_size', 64),
+            ('Dropout', 'dropout', 0.4),
+            ('Batch Size', 'batch_size', 128),
             ('Max Epochs', 'max_epochs', 50),
             ('Learning Rate', 'learning_rate', 0.0005),
         ]
@@ -796,15 +800,52 @@ class MLPanel:
         signals_frame = tk.Frame(section, bg=get_color('bg_light'))
         signals_frame.pack(fill=tk.X, pady=10, padx=20)
 
+        # Signal header with refresh button
+        signal_header = tk.Frame(signals_frame, bg=get_color('bg_light'))
+        signal_header.pack(fill=tk.X, pady=(5, 0))
+
+        tk.Label(
+            signal_header,
+            text="TRADING SIGNALS (Real-Time)",
+            bg=get_color('bg_light'),
+            fg=get_color('text_primary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_NORMAL, 'bold')
+        ).pack(side=tk.LEFT, padx=10)
+
+        # Quick Signal button (works without AI)
+        tk.Button(
+            signal_header,
+            text="[R] Update Signal",
+            command=self._generate_quick_signal,
+            bg=get_color('primary'),
+            fg='white',
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL),
+            padx=10,
+            pady=3,
+            relief=tk.FLAT,
+            cursor="hand2"
+        ).pack(side=tk.RIGHT, padx=10)
+
         # Signal display (large, prominent)
         self.signal_label = tk.Label(
             signals_frame,
-            text="⚪ HOLD - Awaiting prediction",
+            text="[?] Click 'Update Signal' to get trading signal",
             bg=get_color('bg_light'),
             fg=get_color('text_secondary'),
             font=(AppConfig.FONT_FAMILY, 16, 'bold')
         )
         self.signal_label.pack(pady=10)
+
+        # Technical indicators summary
+        self.tech_indicators_label = tk.Label(
+            signals_frame,
+            text="Technical Indicators: RSI | MACD | Trend | Volume",
+            bg=get_color('bg_light'),
+            fg=get_color('text_secondary'),
+            font=(AppConfig.FONT_FAMILY, AppConfig.FONT_SIZE_SMALL),
+            justify=tk.LEFT
+        )
+        self.tech_indicators_label.pack(pady=5)
 
         # Risk management levels
         self.risk_levels_label = tk.Label(
@@ -1066,11 +1107,11 @@ class MLPanel:
         print(f"[ML_PANEL] Loading default configuration...")
 
         defaults = {
-            'hidden_size': '160',
-            'lstm_layers': '2',
+            'hidden_size': '32',
+            'lstm_layers': '1',
             'attention_head_size': '4',
-            'dropout': '0.15',
-            'batch_size': '64',
+            'dropout': '0.4',
+            'batch_size': '128',
             'max_epochs': '50',
             'learning_rate': '0.0005',
         }
@@ -1707,6 +1748,196 @@ Model Performance:
             self._update_prediction_chart(pred_denorm_with_current, symbol, current_price, historical_prices)
         else:
             self.prediction_label.config(text=f"Prediction for {symbol}: ${pred_denorm_with_current[0]:.2f}")
+
+    def _generate_quick_signal(self):
+        """Generate trading signal from technical indicators (NO AI REQUIRED)"""
+        try:
+            symbol = self.predict_symbol_var.get()
+            if not symbol:
+                messagebox.showwarning("No Symbol", "Please select a symbol first.")
+                return
+
+            print(f"\n[ML_PANEL] Generating quick signal for {symbol}...")
+            self.signal_label.config(text="[...] Calculating signals...", fg=get_color('text_secondary'))
+            self.parent.update()
+
+            # Import required modules
+            from src.ml.preprocessing.preprocessor import CryptoPreprocessor
+            from src.utils.debug_logger import debug_log
+            import numpy as np
+
+            # Load latest data for symbol
+            preprocessor = CryptoPreprocessor("dataset")
+            df = preprocessor.load_symbol_data(symbol)
+
+            if df is None or len(df) < 50:
+                self.signal_label.config(text="[X] Insufficient data", fg=get_color('danger'))
+                return
+
+            # Calculate technical indicators on latest data
+            df = df.sort_values('datetime').tail(200)  # Last 200 candles
+
+            # RSI
+            delta = df['close'].diff()
+            gain = delta.where(delta > 0, 0).rolling(14).mean()
+            loss = -delta.where(delta < 0, 0).rolling(14).mean()
+            rs = gain / loss.replace(0, np.nan)
+            df['rsi'] = 100 - (100 / (1 + rs))
+
+            # MACD
+            ema_12 = df['close'].ewm(span=12).mean()
+            ema_26 = df['close'].ewm(span=26).mean()
+            df['macd'] = ema_12 - ema_26
+            df['macd_signal'] = df['macd'].ewm(span=9).mean()
+
+            # Trend (SMA crossover)
+            df['sma_10'] = df['close'].rolling(10).mean()
+            df['sma_20'] = df['close'].rolling(20).mean()
+
+            # Get latest values
+            latest = df.iloc[-1]
+            current_price = latest['close']
+            rsi = latest['rsi']
+            macd = latest['macd']
+            macd_signal = latest['macd_signal']
+            sma_10 = latest['sma_10']
+            sma_20 = latest['sma_20']
+
+            # Calculate signal scores
+            signal_score = 0
+            reasons = []
+
+            # RSI Signal (-2 to +2)
+            if rsi < 30:
+                signal_score += 2
+                reasons.append(f"RSI oversold ({rsi:.0f})")
+            elif rsi < 40:
+                signal_score += 1
+                reasons.append(f"RSI low ({rsi:.0f})")
+            elif rsi > 70:
+                signal_score -= 2
+                reasons.append(f"RSI overbought ({rsi:.0f})")
+            elif rsi > 60:
+                signal_score -= 1
+                reasons.append(f"RSI high ({rsi:.0f})")
+            else:
+                reasons.append(f"RSI neutral ({rsi:.0f})")
+
+            # MACD Signal (-2 to +2)
+            macd_diff = macd - macd_signal
+            if macd > 0 and macd > macd_signal:
+                signal_score += 2
+                reasons.append("MACD bullish cross")
+            elif macd > macd_signal:
+                signal_score += 1
+                reasons.append("MACD above signal")
+            elif macd < 0 and macd < macd_signal:
+                signal_score -= 2
+                reasons.append("MACD bearish cross")
+            elif macd < macd_signal:
+                signal_score -= 1
+                reasons.append("MACD below signal")
+            else:
+                reasons.append("MACD neutral")
+
+            # Trend Signal (-2 to +2)
+            if sma_10 > sma_20 * 1.01:
+                signal_score += 2
+                reasons.append("Strong uptrend (SMA10>SMA20)")
+            elif sma_10 > sma_20:
+                signal_score += 1
+                reasons.append("Uptrend")
+            elif sma_10 < sma_20 * 0.99:
+                signal_score -= 2
+                reasons.append("Strong downtrend (SMA10<SMA20)")
+            elif sma_10 < sma_20:
+                signal_score -= 1
+                reasons.append("Downtrend")
+            else:
+                reasons.append("Sideways")
+
+            # Determine final signal (-6 to +6)
+            if signal_score >= 4:
+                signal_text = "[BUY] STRONG BUY"
+                signal_color = "#4caf50"
+            elif signal_score >= 2:
+                signal_text = "[BUY] BUY"
+                signal_color = "#81c784"
+            elif signal_score <= -4:
+                signal_text = "[SELL] STRONG SELL"
+                signal_color = "#f44336"
+            elif signal_score <= -2:
+                signal_text = "[SELL] SELL"
+                signal_color = "#e57373"
+            else:
+                signal_text = "[HOLD] HOLD"
+                signal_color = "#9e9e9e"
+
+            # Update UI
+            self.signal_label.config(
+                text=f"{signal_text} @ ${current_price:,.2f}",
+                fg=signal_color
+            )
+
+            # Update technical indicators display
+            tech_text = f"RSI: {rsi:.0f} | MACD: {macd:.2f} | Trend: {'UP' if sma_10 > sma_20 else 'DOWN'}"
+            self.tech_indicators_label.config(text=tech_text)
+
+            # Calculate risk levels
+            self._update_risk_levels_quick(current_price, signal_score)
+
+            # Log debug
+            debug_log("quick_signal", "generated", {
+                "symbol": symbol,
+                "signal": signal_text,
+                "score": signal_score,
+                "price": current_price,
+                "rsi": rsi,
+                "macd": macd,
+                "reasons": reasons
+            })
+
+            print(f"[ML_PANEL]   - Signal: {signal_text} (score: {signal_score})")
+            print(f"[ML_PANEL]   - Reasons: {', '.join(reasons)}")
+            self.log_message(f"[SIGNAL] {symbol}: {signal_text} @ ${current_price:,.2f}")
+            self.log_message(f"[SIGNAL] Indicators: {', '.join(reasons)}")
+
+        except Exception as e:
+            print(f"[ML_PANEL] [X] Quick signal generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            self.signal_label.config(text=f"[X] Error: {str(e)[:50]}", fg=get_color('danger'))
+
+    def _update_risk_levels_quick(self, current_price: float, signal_score: int):
+        """Update risk levels based on signal strength"""
+        try:
+            # Calculate stop-loss and take-profit based on signal strength
+            if signal_score >= 2:  # Bullish
+                stop_loss = current_price * 0.98  # -2%
+                take_profit = current_price * 1.04  # +4%
+                position = "LONG"
+            elif signal_score <= -2:  # Bearish
+                stop_loss = current_price * 1.02  # +2% (stop above for short)
+                take_profit = current_price * 0.96  # -4%
+                position = "SHORT"
+            else:  # Neutral
+                stop_loss = current_price * 0.98
+                take_profit = current_price * 1.02
+                position = "HOLD"
+
+            risk_reward = abs(take_profit - current_price) / abs(current_price - stop_loss) if stop_loss != current_price else 0
+
+            levels_text = (
+                f"Risk Management ({position}):\n"
+                f"   Entry:       ${current_price:,.2f}\n"
+                f"   Stop-Loss:   ${stop_loss:,.2f} ({((stop_loss/current_price)-1)*100:+.1f}%)\n"
+                f"   Take-Profit: ${take_profit:,.2f} ({((take_profit/current_price)-1)*100:+.1f}%)\n"
+                f"   Risk/Reward: 1:{risk_reward:.1f}"
+            )
+            self.risk_levels_label.config(text=levels_text)
+
+        except Exception as e:
+            print(f"[ML_PANEL] Failed to update quick risk levels: {e}")
 
     def _update_trading_signal(self, current_price: float, predicted_price: float, price_change_pct: float):
         """Calculate and display trading signal based on prediction"""

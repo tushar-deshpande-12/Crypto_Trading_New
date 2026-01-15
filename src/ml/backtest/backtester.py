@@ -1,11 +1,14 @@
 """
 Backtesting Module for Cryptocurrency Trading Strategy
 Tests model predictions on historical data with realistic trading simulation
+
+IMPORTANT: This backtester works with RETURN predictions (target_return)
+not raw price predictions. It converts predicted returns to price movements.
 """
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -75,6 +78,10 @@ class CryptoBacktester:
     - Win/loss statistics
     - Prediction accuracy
     - Risk metrics
+
+    IMPORTANT: This backtester supports both:
+    1. Price predictions (raw prices in USD)
+    2. Return predictions (normalized returns) - requires target_scaler for denormalization
     """
 
     def __init__(self, config: Optional[BacktestConfig] = None, verbose: bool = True):
@@ -87,11 +94,112 @@ class CryptoBacktester:
         """
         self.config = config or BacktestConfig()
         self.verbose = verbose
+        self.target_scaler = None  # For denormalizing return predictions
 
         if self.verbose:
             print(f"\n[BACKTEST] Initializing backtester")
             print(f"[BACKTEST]   - Initial capital: ${self.config.initial_capital:,.2f}")
             print(f"[BACKTEST]   - Trade fee: {self.config.trade_fee*100:.2f}%")
+
+    def set_target_scaler(self, scaler):
+        """
+        Set the target scaler for denormalizing return predictions.
+
+        Args:
+            scaler: sklearn StandardScaler fitted on target_return
+        """
+        self.target_scaler = scaler
+        if self.verbose:
+            print(f"[BACKTEST] Target scaler set for denormalization")
+
+    def denormalize_returns(self, normalized_returns: np.ndarray) -> np.ndarray:
+        """
+        Denormalize return predictions back to actual returns.
+
+        Args:
+            normalized_returns: Normalized return predictions
+
+        Returns:
+            Actual returns (as percentages)
+        """
+        if self.target_scaler is None:
+            if self.verbose:
+                print(f"[BACKTEST] [!] No target scaler - assuming returns are already denormalized")
+            return normalized_returns
+
+        # Denormalize: actual = normalized * scale + mean
+        actual_returns = normalized_returns * self.target_scaler.scale_[0] + self.target_scaler.mean_[0]
+        return actual_returns
+
+    def returns_to_prices(
+        self,
+        predicted_returns: np.ndarray,
+        current_prices: np.ndarray
+    ) -> np.ndarray:
+        """
+        Convert return predictions to price predictions.
+
+        Args:
+            predicted_returns: Predicted returns (as decimals, e.g., 0.02 for 2%)
+            current_prices: Current prices at each prediction point
+
+        Returns:
+            Predicted future prices
+        """
+        # future_price = current_price * (1 + return)
+        predicted_prices = current_prices * (1 + predicted_returns)
+        return predicted_prices
+
+    def run_backtest_from_returns(
+        self,
+        predicted_returns: np.ndarray,
+        actual_returns: np.ndarray,
+        current_prices: np.ndarray,
+        timestamps: pd.DatetimeIndex,
+        denormalize: bool = True
+    ) -> 'BacktestResults':
+        """
+        Run backtest using return predictions (from target_return model).
+
+        This is the preferred method when using a model trained on target_return.
+
+        Args:
+            predicted_returns: (n_samples,) predicted future returns (normalized)
+            actual_returns: (n_samples,) actual future returns (normalized)
+            current_prices: (n_samples,) current prices in USD
+            timestamps: (n_samples,) timestamps
+            denormalize: Whether to denormalize returns using target_scaler
+
+        Returns:
+            BacktestResults with all metrics
+        """
+        if self.verbose:
+            print(f"\n[BACKTEST] Running backtest from return predictions...")
+            print(f"[BACKTEST]   - Samples: {len(predicted_returns)}")
+
+        # Denormalize returns if needed
+        if denormalize:
+            predicted_returns = self.denormalize_returns(predicted_returns)
+            actual_returns = self.denormalize_returns(actual_returns)
+
+        if self.verbose:
+            print(f"[BACKTEST]   - Predicted return range: [{predicted_returns.min():.4f}, {predicted_returns.max():.4f}]")
+            print(f"[BACKTEST]   - Actual return range: [{actual_returns.min():.4f}, {actual_returns.max():.4f}]")
+
+        # Convert returns to prices
+        predicted_prices = self.returns_to_prices(predicted_returns, current_prices)
+        actual_prices = self.returns_to_prices(actual_returns, current_prices)
+
+        if self.verbose:
+            print(f"[BACKTEST]   - Converted to price predictions")
+
+        # Run standard backtest with prices
+        return self.run_backtest(
+            predictions=predicted_prices,
+            actual_prices=actual_prices,
+            timestamps=timestamps,
+            initial_prices=current_prices
+        )
 
     def run_backtest(
         self,
@@ -118,7 +226,10 @@ class CryptoBacktester:
         if self.verbose:
             print(f"\n[BACKTEST] Running backtest...")
             print(f"[BACKTEST]   - Samples: {len(predictions)}")
-            print(f"[BACKTEST]   - Period: {timestamps[0]} to {timestamps[-1]}")
+            # Handle both numpy arrays and pandas Series
+            ts_first = timestamps.iloc[0] if hasattr(timestamps, 'iloc') else timestamps[0]
+            ts_last = timestamps.iloc[-1] if hasattr(timestamps, 'iloc') else timestamps[-1]
+            print(f"[BACKTEST]   - Period: {ts_first} to {ts_last}")
 
         # If initial prices not provided, shift actual prices by 1
         if initial_prices is None:
@@ -145,17 +256,17 @@ class CryptoBacktester:
 
                 # Determine what signal this would be
                 if change_pct > self.config.confidence_threshold * 100:
-                    signal = "BUY 🟢"
+                    signal = "BUY [BUY]"
                     trade_signals['buy'] += 1
                 elif change_pct < -self.config.confidence_threshold * 100:
-                    signal = "SELL 🔴"
+                    signal = "SELL [SELL]"
                     trade_signals['sell'] += 1
                 else:
-                    signal = "HOLD 🟡"
+                    signal = "HOLD [HOLD]"
                     trade_signals['hold'] += 1
 
                 print(f"  {i}: current=${initial_prices[i]:.2f}, predicted=${predictions[i]:.2f}, actual=${actual_prices[i]:.2f}")
-                print(f"      -> change: {change_pct:+.3f}% (threshold: ±{self.config.confidence_threshold*100:.2f}%) -> {signal}")
+                print(f"      -> change: {change_pct:+.3f}% (threshold: +/-{self.config.confidence_threshold*100:.2f}%) -> {signal}")
 
             print(f"\n[BACKTEST] Potential signals in all data:")
             print(f"  BUY signals:  {trade_signals['buy']}")
@@ -298,7 +409,7 @@ class CryptoBacktester:
         mae = np.mean(np.abs(predictions - actual_prices))
         rmse = np.sqrt(np.mean((predictions - actual_prices) ** 2))
 
-        # R² score
+        # R2 score
         ss_res = np.sum((actual_prices - predictions) ** 2)
         ss_tot = np.sum((actual_prices - np.mean(actual_prices)) ** 2)
         r2 = 1 - (ss_res / (ss_tot + 1e-8))
@@ -356,7 +467,7 @@ class CryptoBacktester:
         print(f"\nPREDICTION ACCURACY:")
         print(f"  MAE:                {results.prediction_mae:.4f}")
         print(f"  RMSE:               {results.prediction_rmse:.4f}")
-        print(f"  R² Score:           {results.prediction_r2:.4f}")
+        print(f"  R2 Score:           {results.prediction_r2:.4f}")
         print(f"  Direction Accuracy: {results.direction_accuracy:.2f}%")
 
         print(f"\n{'='*80}")
@@ -431,7 +542,7 @@ class CryptoBacktester:
 
         # Plot 4: Performance Metrics
         ax4 = axes[1, 1]
-        metrics_labels = ['MAE', 'RMSE', 'R²', 'Dir Acc']
+        metrics_labels = ['MAE', 'RMSE', 'R2', 'Dir Acc']
         metrics_values = [
             results.prediction_mae,
             results.prediction_rmse,
@@ -444,7 +555,7 @@ class CryptoBacktester:
         normalized_values = [
             metrics_values[0] / max_val if max_val > 0 else 0,
             metrics_values[1] / max_val if max_val > 0 else 0,
-            metrics_values[2],  # R² already 0-1
+            metrics_values[2],  # R2 already 0-1
             metrics_values[3]   # Direction accuracy 0-1
         ]
 

@@ -1,0 +1,123 @@
+{
+  "model_name": "lstm",
+  "start_time": "2026-01-15T13:04:50.288059",
+  "end_time": "2026-01-15T13:07:19.257550",
+  "status": "exit",
+  "hyperparameters": {
+    "input_size": 83,
+    "hidden_size": 64,
+    "num_layers": 2,
+    "dropout": 0.2,
+    "prediction_horizon": 1,
+    "learning_rate": 0.0001,
+    "weight_decay": 1e-05,
+    "direction_loss_weight": 0.0
+  },
+  "epochs": [
+    {
+      "epoch": 0,
+      "timestamp": "2026-01-15T13:05:26.681191",
+      "metrics": {
+        "lr-AdamW": 9.999999747378752e-05,
+        "train_loss": 0.2174181044101715,
+        "train_reg_loss": 0.2174181044101715,
+        "train_dir_loss": 0.723246157169342,
+        "train_mae": 0.6105252504348755,
+        "train_rmse": 0.9796903133392334,
+        "train_r2": 0.15240859985351562,
+        "train_dir_acc": 0.4871794879436493,
+        "train_reg_dir_acc": 0.6153846383094788,
+        "val_loss": 0.19944705069065094,
+        "val_reg_loss": 0.19944705069065094,
+        "val_dir_loss": 0.7290362119674683,
+        "val_mae": 0.5961452126502991,
+        "val_rmse": 0.715374231338501,
+        "val_r2": -1.2618852853775024,
+        "val_dir_acc": 0.45577237010002136,
+        "val_reg_dir_acc": 0.5223007798194885
+      },
+      "learning_rate": 0.0001
+    },
+    {
+      "epoch": 1,
+      "timestamp": "2026-01-15T13:06:04.670890",
+      "metrics": {
+        "lr-AdamW": 9.999999747378752e-05,
+        "train_loss": 0.222695991396904,
+        "train_reg_loss": 0.222695991396904,
+        "train_dir_loss": 0.7051258683204651,
+        "train_mae": 0.6288742423057556,
+        "train_rmse": 1.0683484077453613,
+        "train_r2": 0.18890273571014404,
+        "train_dir_acc": 0.41025641560554504,
+        "train_reg_dir_acc": 0.7179487347602844,
+        "val_loss": 0.2257772535085678,
+        "val_reg_loss": 0.2257772535085678,
+        "val_dir_loss": 0.7142950892448425,
+        "val_mae": 0.6515424847602844,
+        "val_rmse": 0.7723931670188904,
+        "val_r2": -1.8975193500518799,
+        "val_dir_acc": 0.4761354327201843,
+        "val_reg_dir_acc": 0.5121702551841736
+      },
+      "learning_rate": 0.0001
+    },
+    {
+      "epoch": 2,
+      "timestamp": "2026-01-15T13:06:36.226838",
+      "metrics": {
+        "lr-AdamW": 9.999999747378752e-05,
+        "train_loss": 0.2310919165611267,
+        "train_reg_loss": 0.2310919165611267,
+        "train_dir_loss": 0.7433210015296936,
+        "train_mae": 0.6272657513618469,
+        "train_rmse": 1.4370923042297363,
+        "train_r2": 0.2280014157295227,
+        "train_dir_acc": 0.43589743971824646,
+        "train_reg_dir_acc": 0.7435897588729858,
+        "val_loss": 0.27057793736457825,
+        "val_reg_loss": 0.27057793736457825,
+        "val_dir_loss": 0.7221358418464661,
+        "val_mae": 0.7470228672027588,
+        "val_rmse": 0.8685327172279358,
+        "val_r2": -3.431276798248291,
+        "val_dir_acc": 0.4670587480068207,
+        "val_reg_dir_acc": 0.5193092226982117
+      },
+      "learning_rate": 0.0001
+    },
+    {
+      "epoch": 3,
+      "timestamp": "2026-01-15T13:07:13.888130",
+      "metrics": {
+        "lr-AdamW": 9.999999747378752e-05,
+        "train_loss": 0.08518233150243759,
+        "train_reg_loss": 0.08518233150243759,
+        "train_dir_loss": 0.7023735046386719,
+        "train_mae": 0.3399694859981537,
+        "train_rmse": 0.45617592334747314,
+        "train_r2": 0.3932937979698181,
+        "train_dir_acc": 0.4871794879436493,
+        "train_reg_dir_acc": 0.692307710647583,
+        "val_loss": 0.2894808053970337,
+        "val_reg_loss": 0.2894808053970337,
+        "val_dir_loss": 0.7115412950515747,
+        "val_mae": 0.7879374623298645,
+        "val_rmse": 0.9091993570327759,
+        "val_r2": -3.8525569438934326,
+        "val_dir_acc": 0.46695676445961,
+        "val_reg_dir_acc": 0.5151957869529724
+      },
+      "learning_rate": 0.0001
+    }
+  ],
+  "best_epoch": 0,
+  "best_val_loss": 0.19944705069065094,
+  "total_epochs": 4,
+  "interruption_reason": null,
+  "trainer_config": {
+    "max_epochs": 50,
+    "accelerator": "<lightning.pytorch.accelerators.cuda.CUDAAccelerator object at 0x000001DE042D3A10>",
+    "gradient_clip_val": 1.0
+  }
+}

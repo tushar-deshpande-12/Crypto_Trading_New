@@ -1,0 +1,26 @@
+{
+  "model_name": "lstm",
+  "start_time": "2026-01-15T23:17:59.285304",
+  "end_time": "2026-01-15T23:18:26.978398",
+  "status": "exit",
+  "hyperparameters": {
+    "input_size": 61,
+    "hidden_size": 160,
+    "num_layers": 3,
+    "dropout": 0.4,
+    "prediction_horizon": 1,
+    "learning_rate": 0.0001,
+    "weight_decay": 0.0001,
+    "use_classification": true
+  },
+  "epochs": [],
+  "best_epoch": null,
+  "best_val_loss": Infinity,
+  "total_epochs": 0,
+  "interruption_reason": null,
+  "trainer_config": {
+    "max_epochs": 20,
+    "accelerator": "<lightning.pytorch.accelerators.cuda.CUDAAccelerator object at 0x00000185A798AD50>",
+    "gradient_clip_val": 1.0
+  }
+}

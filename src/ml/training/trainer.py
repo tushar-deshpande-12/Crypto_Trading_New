@@ -39,6 +39,15 @@ from ..models import TFTConfig
 from ..models.tft_model import CryptoTFT
 from .metrics import MetricsTracker, calculate_all_metrics
 
+# Debug logging
+try:
+    from ...utils.debug_logger import get_debug_logger, debug_log
+    DEBUG_AVAILABLE = True
+except ImportError:
+    DEBUG_AVAILABLE = False
+    def debug_log(*args, **kwargs): pass
+    def get_debug_logger(): return None
+
 
 class TFTTrainer:
     """
@@ -201,27 +210,22 @@ class TFTTrainer:
             callbacks = [checkpoint_callback, early_stop_callback, lr_monitor]
 
             # Add advanced training callbacks for better performance
-            # Temporarily disabled due to PyTorch Lightning 2.x compatibility
-            # Will be re-enabled after fixing callback signatures
-            if self.verbose:
-                print(f"[TRAINER]   [!] Advanced callbacks temporarily disabled")
-                print(f"[TRAINER]       (PyTorch Lightning 2.x compatibility fix in progress)")
-
-            # TODO: Re-enable after fixing callback signatures for Lightning 2.x
-            # try:
-            #     from src.ml.training.callbacks import create_training_callbacks
-            #     advanced_callbacks = create_training_callbacks(
-            #         self.config,
-            #         enable_warmup=self.config.warmup_enabled
-            #     )
-            #     callbacks.extend(advanced_callbacks)
-            #     if self.verbose:
-            #         print(f"[TRAINER]   OK Added {len(advanced_callbacks)} advanced callbacks:")
-            #         for cb in advanced_callbacks:
-            #             print(f"[TRAINER]      - {cb.__class__.__name__}")
-            # except Exception as e:
-            #     if self.verbose:
-            #         print(f"[TRAINER]   [!] Could not load advanced callbacks: {e}")
+            # FIXED: Re-enabled for Lightning 2.x
+            try:
+                from .callbacks import create_training_callbacks
+                advanced_callbacks = create_training_callbacks(
+                    self.config,
+                    enable_warmup=self.config.warmup_enabled
+                )
+                callbacks.extend(advanced_callbacks)
+                if self.verbose:
+                    print(f"[TRAINER]   [OK] Added {len(advanced_callbacks)} advanced callbacks:")
+                    for cb in advanced_callbacks:
+                        print(f"[TRAINER]      - {cb.__class__.__name__}")
+            except Exception as e:
+                if self.verbose:
+                    print(f"[TRAINER]   [!] Could not load advanced callbacks: {e}")
+                    print(f"[TRAINER]       Training will continue with basic callbacks")
 
             # Add GUI progress callback if provided
             if self.progress_callback:
@@ -365,11 +369,11 @@ class TFTTrainer:
             print(f"[TRAINER] VALIDATION SUMMARY")
             print(f"[TRAINER] {'='*60}")
             for step, passed in validation_results.items():
-                status = "OK PASS" if passed else "❌ FAIL"
+                status = "OK PASS" if passed else "[X] FAIL"
                 print(f"[TRAINER] {status} - {step}")
 
             if not all_passed:
-                print(f"\n[TRAINER] [!]️  WARNING: Some validation checks failed!")
+                print(f"\n[TRAINER] [!]  WARNING: Some validation checks failed!")
                 print(f"[TRAINER] Training will continue, but results may be poor.")
             else:
                 print(f"\n[TRAINER] OK All validation checks passed! Ready to train.")

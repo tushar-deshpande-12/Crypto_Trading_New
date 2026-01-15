@@ -466,17 +466,22 @@ class CryptoAIPredictorApp:
                     from src.ml.models.lstm_model import SimpleLSTMTrainer
 
                     # Create LSTM trainer
-                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Creating LSTM trainer..."))
+                    # CLASSIFICATION MODEL with strong regularization:
+                    # - hidden_size=32: Very simple to prevent overfitting
+                    # - dropout=0.4: Strong regularization
+                    # - num_layers=1: Single layer to reduce capacity
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Creating LSTM CLASSIFIER..."))
+                    self.root.after(0, lambda: self.ml_panel.log_message("[TRAINING] Mode: Classification (UP/NEUTRAL/DOWN)"))
                     lstm_trainer = SimpleLSTMTrainer(
-                        sequence_length=168,  # 1 week
-                        prediction_horizon=10,
-                        hidden_size=config.get('hidden_size', 128),
-                        num_layers=config.get('lstm_layers', 2),
-                        dropout=config.get('dropout', 0.2),
-                        learning_rate=config.get('learning_rate', 0.001),
-                        batch_size=config.get('batch_size', 64),
+                        sequence_length=168,  # 1 week of hourly data
+                        prediction_horizon=config.get('prediction_horizon', 1),
+                        hidden_size=config.get('hidden_size', 32),  # Very small
+                        num_layers=config.get('lstm_layers', 1),  # Single layer
+                        dropout=config.get('dropout', 0.4),  # High dropout
+                        learning_rate=config.get('learning_rate', 0.0005),
+                        batch_size=config.get('batch_size', 128),  # Larger batches
                         max_epochs=config.get('max_epochs', 50),
-                        early_stopping_patience=20,
+                        early_stopping_patience=15,
                         checkpoint_dir="models/checkpoints/lstm",
                         verbose=True,
                         progress_callback=self.ml_panel.update_progress,
@@ -759,12 +764,18 @@ class CryptoAIPredictorApp:
                     if len(live_df) < sequence_length:
                         raise ValueError(f"Not enough data for prediction. Need {sequence_length} rows, have {len(live_df)}")
 
-                    # Prepare input sequence directly (don't use SimpleLSTMDataset for single prediction)
-                    # Get feature columns (same logic as SimpleLSTMDataset)
-                    exclude_cols = ['datetime', 'symbol', 'timestamp', 'close_time',
-                                  'hour', 'day_of_week', 'day_of_month', 'month', 'time_idx']
-                    numeric_cols = live_df.select_dtypes(include=[np.number]).columns.tolist()
-                    feature_columns = [col for col in numeric_cols if col not in exclude_cols]
+                    # Prepare input sequence - use centralized feature selection
+                    from src.ml.models.lstm_model import get_lstm_feature_columns
+
+                    model_feature_cols = getattr(lstm_trainer, 'feature_columns', None)
+                    feature_columns = get_lstm_feature_columns(
+                        live_df,
+                        saved_feature_cols=model_feature_cols,
+                        expected_input_size=lstm_trainer.input_size
+                    )
+
+                    self.root.after(0, lambda n=len(feature_columns), exp=lstm_trainer.input_size:
+                        self.ml_panel.log_message(f"[PREDICTION] Using {n} features (model expects {exp})"))
 
                     # Get the last sequence_length rows as input
                     input_data = live_df.tail(sequence_length)[feature_columns].values.astype(np.float32)
@@ -780,16 +791,25 @@ class CryptoAIPredictorApp:
                     input_tensor = input_tensor.to(device)
 
                     with torch.no_grad():
-                        preds = model(input_tensor)
-                        pred_values = preds.squeeze(0).cpu().numpy()
+                        output = model(input_tensor)
+                        # Handle dual output (regression, direction) from enhanced model
+                        if isinstance(output, tuple):
+                            reg_preds, dir_logits = output
+                            pred_values = reg_preds.squeeze(0).cpu().numpy()
+                            dir_probs = torch.sigmoid(dir_logits).squeeze(0).cpu().numpy()
+                        else:
+                            pred_values = output.squeeze(0).cpu().numpy()
+                            dir_probs = (pred_values > 0).astype(float)
 
                     # Format predictions like TFT output
                     predictions = {
                         'prediction': pred_values,
                         'median': pred_values,
+                        'direction_prob': dir_probs,  # Probability of positive return
                     }
 
-                    self.root.after(0, lambda: self.ml_panel.log_message(f"[PREDICTION] OK LSTM predictions generated!"))
+                    self.root.after(0, lambda d=dir_probs[0] if len(dir_probs) > 0 else 0.5:
+                        self.ml_panel.log_message(f"[PREDICTION] OK LSTM: direction prob={d:.2%}"))
 
                 else:
                     # TFT prediction path
@@ -913,22 +933,60 @@ class CryptoAIPredictorApp:
                 is_lstm_model = isinstance(loaded_model, SimpleLSTMTrainer)
 
                 if is_lstm_model:
+                    # LSTM needs more data - combine all splits for evaluation
+                    lstm_trainer = loaded_model
+                    min_required = lstm_trainer.sequence_length + lstm_trainer.prediction_horizon + 1
+
+                    if len(test_df) < min_required:
+                        # Combine val and test for more data
+                        import pandas as pd
+                        test_df = pd.concat([val_df, test_df], ignore_index=True)
+                        test_df = test_df.sort_values('datetime').reset_index(drop=True)
+                        self.root.after(0, lambda c=len(test_df):
+                            self.ml_panel.log_message(f"[TEST] Combined val + test = {c} samples for LSTM"))
+
+                    if len(test_df) < min_required:
+                        # Still not enough - use all data
+                        test_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
+                        test_df = test_df.drop_duplicates(subset=['datetime', 'symbol']).sort_values('datetime').reset_index(drop=True)
+                        self.root.after(0, lambda c=len(test_df):
+                            self.ml_panel.log_message(f"[TEST] Using all {c} samples for LSTM evaluation"))
+
+                if is_lstm_model:
                     # LSTM model testing path
                     self.root.after(0, lambda: self.ml_panel.log_message(f"[TEST] Detected LSTM model"))
                     lstm_trainer = loaded_model
 
-                    # Create LSTM test dataset
-                    from src.ml.models.lstm_model import SimpleLSTMDataset
+                    # Create LSTM test dataset with centralized feature selection
+                    from src.ml.models.lstm_model import SimpleLSTMDataset, get_lstm_feature_columns
                     from torch.utils.data import DataLoader
+
+                    # Get feature columns using centralized function
+                    model_feature_cols = getattr(lstm_trainer, 'feature_columns', None)
+                    feature_columns = get_lstm_feature_columns(
+                        test_df,
+                        saved_feature_cols=model_feature_cols,
+                        expected_input_size=lstm_trainer.input_size
+                    )
 
                     test_dataset = SimpleLSTMDataset(
                         test_df,
                         sequence_length=lstm_trainer.sequence_length,
-                        prediction_horizon=lstm_trainer.prediction_horizon
+                        prediction_horizon=lstm_trainer.prediction_horizon,
+                        feature_columns=feature_columns
                     )
 
-                    self.root.after(0, lambda n=len(test_dataset):
-                        self.ml_panel.log_message(f"[TEST] LSTM dataset created with {n} samples"))
+                    self.root.after(0, lambda n=len(test_dataset), f=len(feature_columns), exp=lstm_trainer.input_size:
+                        self.ml_panel.log_message(f"[TEST] LSTM dataset: {n} samples, {f} features (model expects {exp})"))
+
+                    # Check if we have enough data
+                    if len(test_dataset) == 0:
+                        min_required = lstm_trainer.sequence_length + lstm_trainer.prediction_horizon + 1
+                        raise ValueError(
+                            f"Not enough test data for LSTM. Have {len(test_df)} rows, "
+                            f"need at least {min_required} (sequence_length={lstm_trainer.sequence_length} + "
+                            f"prediction_horizon={lstm_trainer.prediction_horizon} + 1)"
+                        )
 
                     test_loader = DataLoader(
                         test_dataset,
@@ -952,7 +1010,12 @@ class CryptoAIPredictorApp:
                             x = x.to(device)
                             y = y.to(device)
 
-                            preds = model(x)  # (batch, prediction_horizon)
+                            output = model(x)
+                            # Handle dual output (regression, direction) from enhanced model
+                            if isinstance(output, tuple):
+                                preds, _ = output  # Use regression output
+                            else:
+                                preds = output
                             all_predictions.extend(preds[:, 0].cpu().numpy())  # First prediction
                             all_actuals.extend(y[:, 0].cpu().numpy())  # First target
 
@@ -1248,6 +1311,24 @@ class CryptoAIPredictorApp:
                     save_scaler_path="models/scalers.pkl"
                 )
 
+                # For LSTM, combine data if test set is too small
+                if model_type == 'lstm':
+                    min_required = lstm_trainer.sequence_length + lstm_trainer.prediction_horizon + 1
+                    print(f"[APP] LSTM needs {min_required} rows, test has {len(test_df)}")
+
+                    if len(test_df) < min_required:
+                        # Combine val and test
+                        import pandas as pd
+                        test_df = pd.concat([val_df, test_df], ignore_index=True)
+                        test_df = test_df.sort_values('datetime').reset_index(drop=True)
+                        print(f"[APP] Combined val + test = {len(test_df)} samples")
+
+                    if len(test_df) < min_required:
+                        # Still not enough - use all data
+                        test_df = pd.concat([train_df, val_df, test_df], ignore_index=True)
+                        test_df = test_df.drop_duplicates(subset=['datetime', 'symbol']).sort_values('datetime').reset_index(drop=True)
+                        print(f"[APP] Using all {len(test_df)} samples for LSTM backtest")
+
                 # Generate predictions on test set
                 model.eval()
                 predictions_list = []
@@ -1256,22 +1337,51 @@ class CryptoAIPredictorApp:
 
                 with torch.no_grad():
                     if model_type == 'lstm':
-                        # LSTM predictions
-                        from src.ml.models.lstm_model import SimpleLSTMDataset
+                        # LSTM predictions with centralized feature selection
+                        from src.ml.models.lstm_model import SimpleLSTMDataset, get_lstm_feature_columns
+                        import torch
+
+                        # Get feature columns using centralized function
+                        model_feature_cols = getattr(lstm_trainer, 'feature_columns', None)
+                        feature_columns = get_lstm_feature_columns(
+                            test_df,
+                            saved_feature_cols=model_feature_cols,
+                            expected_input_size=lstm_trainer.input_size
+                        )
 
                         test_dataset = SimpleLSTMDataset(
                             test_df,
                             sequence_length=lstm_trainer.sequence_length,
-                            prediction_horizon=lstm_trainer.prediction_horizon
+                            prediction_horizon=lstm_trainer.prediction_horizon,
+                            feature_columns=feature_columns
                         )
 
-                        print(f"[APP] LSTM backtest: {len(test_dataset)} samples available")
+                        print(f"[APP] LSTM backtest: {len(test_dataset)} samples, {len(feature_columns)} features (model expects {lstm_trainer.input_size})")
+
+                        # Check if we have enough data
+                        if len(test_dataset) == 0:
+                            min_required = lstm_trainer.sequence_length + lstm_trainer.prediction_horizon + 1
+                            raise ValueError(
+                                f"Not enough test data for LSTM backtest. Have {len(test_df)} rows, "
+                                f"need at least {min_required} (sequence_length={lstm_trainer.sequence_length} + "
+                                f"prediction_horizon={lstm_trainer.prediction_horizon} + 1)"
+                            )
+
+                        device = next(model.parameters()).device
 
                         for i in range(min(len(test_dataset), 500)):  # Limit to 500 samples
                             x, y = test_dataset[i]
-                            pred = model.predict_next_hours(x.numpy())
+                            x_tensor = x.unsqueeze(0).to(device)  # Add batch dimension
+                            output = model(x_tensor)  # Forward pass
 
-                            predictions_list.append(pred[0])  # First hour prediction
+                            # Handle dual output (regression, direction) from enhanced model
+                            if isinstance(output, tuple):
+                                pred, _ = output  # Use regression output
+                            else:
+                                pred = output
+                            pred_value = pred.squeeze(0).cpu().numpy()
+
+                            predictions_list.append(pred_value[0])  # First hour prediction
                             actuals_list.append(y[0].numpy())  # First hour actual
 
                             # Get timestamp
@@ -1380,10 +1490,20 @@ class CryptoAIPredictorApp:
 
                 predictions = np.array(predictions_list)
                 actuals = np.array(actuals_list)
-                timestamps = pd.DatetimeIndex(timestamps_list)
 
-                print(f"[APP] Backtest collected {len(predictions)} prediction points")
-                print(f"[APP] Date range: {timestamps[0]} to {timestamps[-1]}")
+                # Validate we have predictions
+                if len(predictions) == 0:
+                    raise ValueError("No predictions generated. Check if test data has enough samples.")
+
+                # Handle timestamps
+                if timestamps_list:
+                    timestamps = pd.DatetimeIndex(timestamps_list)
+                    print(f"[APP] Backtest collected {len(predictions)} prediction points")
+                    print(f"[APP] Date range: {timestamps[0]} to {timestamps[-1]}")
+                else:
+                    # Create synthetic timestamps if not available
+                    timestamps = pd.date_range(start='2024-01-01', periods=len(predictions), freq='h')
+                    print(f"[APP] Backtest collected {len(predictions)} prediction points (synthetic timestamps)")
 
                 # Denormalize predictions and actuals for backtesting
                 # (Backtester needs real prices, not normalized values)

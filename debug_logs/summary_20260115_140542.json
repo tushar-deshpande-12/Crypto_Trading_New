@@ -1,0 +1,13 @@
+{
+  "session_id": "20260115_140542",
+  "total_entries": 1,
+  "stages": {
+    "preprocessing": 1
+  },
+  "status_counts": {
+    "info": 0,
+    "warning": 0,
+    "error": 1,
+    "success": 0
+  }
+}

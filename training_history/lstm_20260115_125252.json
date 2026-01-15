@@ -1,0 +1,26 @@
+{
+  "model_name": "lstm",
+  "start_time": "2026-01-15T12:52:52.888450",
+  "end_time": "2026-01-15T12:56:28.418557",
+  "status": "error",
+  "hyperparameters": {
+    "input_size": 83,
+    "hidden_size": 64,
+    "num_layers": 2,
+    "dropout": 0.2,
+    "prediction_horizon": 1,
+    "learning_rate": 0.0001,
+    "weight_decay": 1e-05,
+    "direction_loss_weight": 0.0
+  },
+  "epochs": [],
+  "best_epoch": null,
+  "best_val_loss": Infinity,
+  "total_epochs": 0,
+  "interruption_reason": "SequentialLR does not support `ReduceLROnPlateau` scheduler as it requires additional kwargs to be specified when calling `step`, but got one at index 1 in the given schedulers sequence.",
+  "trainer_config": {
+    "max_epochs": 50,
+    "accelerator": "<lightning.pytorch.accelerators.cuda.CUDAAccelerator object at 0x00000256886DB770>",
+    "gradient_clip_val": 1.0
+  }
+}

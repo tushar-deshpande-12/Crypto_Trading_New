@@ -1,0 +1,16 @@
+{
+  "session_id": "20260115_140843",
+  "total_entries": 10,
+  "stages": {
+    "preprocessing": 4,
+    "dataset": 4,
+    "training": 1,
+    "backtesting": 1
+  },
+  "status_counts": {
+    "info": 6,
+    "warning": 0,
+    "error": 2,
+    "success": 2
+  }
+}

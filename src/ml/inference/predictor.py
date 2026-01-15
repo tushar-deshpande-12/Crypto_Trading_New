@@ -1,6 +1,9 @@
 """
 Cryptocurrency Price Predictor
 Inference pipeline for generating predictions with trained TFT model
+
+IMPORTANT: This predictor handles RETURN predictions (target_return)
+and converts them to price predictions using proper denormalization.
 """
 
 import numpy as np
@@ -18,6 +21,9 @@ except ImportError:
 
 from ..models.tft_model import CryptoTFT
 from ..preprocessing.preprocessor import CryptoPreprocessor
+
+# Default prediction horizon (must match model training)
+PREDICTION_HORIZON = 24
 
 
 class CryptoPredictor:
@@ -281,10 +287,27 @@ class CryptoPredictor:
                 return_quantiles=return_confidence_intervals
             )
 
-            # Denormalize predictions
+            # Get current price for return-to-price conversion
+            # Use the last known close price from the data
+            current_price = None
+            if symbol in self.preprocessor.scalers:
+                scaler = self.preprocessor.scalers[symbol]
+                try:
+                    close_idx = self.preprocessor.feature_columns.index('close')
+                    # Get the last normalized close value and denormalize it
+                    last_close_norm = preprocessed_data['close'].iloc[-1]
+                    current_price = last_close_norm * scaler.scale_[close_idx] + scaler.mean_[close_idx]
+                    if self.verbose:
+                        print(f"[PREDICTOR]   - Current price for {symbol}: ${current_price:.2f}")
+                except (ValueError, IndexError) as e:
+                    if self.verbose:
+                        print(f"[PREDICTOR]   [!] Could not get current price: {e}")
+
+            # Denormalize predictions (returns -> prices)
             predictions_denorm = self._denormalize_predictions(
                 predictions,
-                symbol
+                symbol,
+                current_price=current_price
             )
 
             # Generate future timestamps
@@ -311,46 +334,74 @@ class CryptoPredictor:
     def _denormalize_predictions(
         self,
         predictions: Dict[str, np.ndarray],
-        symbol: str
+        symbol: str,
+        current_price: Optional[float] = None
     ) -> Dict[str, np.ndarray]:
         """
-        Denormalize predictions to actual price values
+        Denormalize return predictions to actual price values.
+
+        The model predicts normalized returns (target_return).
+        This method:
+        1. Denormalizes returns using target_scaler
+        2. Converts returns to prices using current price
 
         Args:
-            predictions: Normalized predictions
+            predictions: Normalized return predictions
             symbol: Cryptocurrency symbol
+            current_price: Current price for conversion (optional)
 
         Returns:
-            Denormalized predictions
+            Denormalized price predictions
         """
         if self.verbose:
             print(f"\n[PREDICTOR] Denormalizing predictions...")
 
         try:
-            if symbol not in self.preprocessor.scalers:
-                raise ValueError(f"No scaler found for symbol: {symbol}")
+            # Get target scaler (for target_return)
+            target_scaler = self.preprocessor.target_scaler
 
-            scaler = self.preprocessor.scalers[symbol]
+            if target_scaler is None:
+                if self.verbose:
+                    print(f"[PREDICTOR]   [!] No target scaler found - assuming raw returns")
+                # Assume predictions are already actual returns
+                actual_returns = predictions
+            else:
+                if self.verbose:
+                    print(f"[PREDICTOR]   - Using target scaler")
+                    print(f"[PREDICTOR]   - Target mean: {target_scaler.mean_[0]:.6f}")
+                    print(f"[PREDICTOR]   - Target scale: {target_scaler.scale_[0]:.6f}")
 
-            # Find index of 'close' feature in scaler
-            close_idx = self.preprocessor.feature_columns.index('close')
+                # Denormalize returns
+                actual_returns = {}
+                for key, values in predictions.items():
+                    if key != 'timestamps':
+                        # Denormalize: actual = normalized * scale + mean
+                        denorm_values = values * target_scaler.scale_[0] + target_scaler.mean_[0]
+                        actual_returns[key] = denorm_values
 
-            if self.verbose:
-                print(f"[PREDICTOR]   - Using scaler for {symbol}")
-                print(f"[PREDICTOR]   - Close feature index: {close_idx}")
-                print(f"[PREDICTOR]   - Scaler mean: {scaler.mean_[close_idx]:.2f}")
-                print(f"[PREDICTOR]   - Scaler scale: {scaler.scale_[close_idx]:.2f}")
+                        if self.verbose:
+                            print(f"[PREDICTOR]   - {key} returns: {denorm_values.min():.4f} to {denorm_values.max():.4f}")
 
-            denorm_predictions = {}
+            # Convert returns to prices if current price provided
+            if current_price is not None:
+                if self.verbose:
+                    print(f"[PREDICTOR]   - Converting returns to prices using current: ${current_price:.2f}")
 
-            for key, values in predictions.items():
-                if key != 'timestamps':  # Skip timestamps
-                    # Denormalize: value * scale + mean
-                    denorm_values = values * scaler.scale_[close_idx] + scaler.mean_[close_idx]
-                    denorm_predictions[key] = denorm_values.flatten()
+                denorm_predictions = {}
+                for key, returns in actual_returns.items():
+                    if key != 'timestamps':
+                        # future_price = current_price * (1 + return)
+                        prices = current_price * (1 + returns)
+                        denorm_predictions[key] = prices.flatten()
 
-                    if self.verbose:
-                        print(f"[PREDICTOR]   - {key}: {denorm_values.min():.2f} to {denorm_values.max():.2f}")
+                        if self.verbose:
+                            print(f"[PREDICTOR]   - {key} prices: ${prices.min():.2f} to ${prices.max():.2f}")
+            else:
+                # Return actual returns without price conversion
+                denorm_predictions = {k: v.flatten() if hasattr(v, 'flatten') else v
+                                      for k, v in actual_returns.items()}
+                if self.verbose:
+                    print(f"[PREDICTOR]   [!] No current price - returning actual returns")
 
             if self.verbose:
                 print(f"[PREDICTOR] [OK] Denormalization complete")
@@ -359,6 +410,8 @@ class CryptoPredictor:
 
         except Exception as e:
             print(f"[PREDICTOR] [X] Denormalization failed: {e}")
+            import traceback
+            traceback.print_exc()
             raise
 
     def predict_multiple(

@@ -37,9 +37,9 @@ class CryptoTimeSeriesDataset:
     def __init__(
         self,
         data: pd.DataFrame,
-        context_length: int = 2000,
-        prediction_length: int = 10,
-        target_column: str = 'close',
+        context_length: int = 168,
+        prediction_length: int = 24,  # FIXED: Match preprocessor's PREDICTION_HORIZON
+        target_column: str = 'target_return',  # FIXED: Use target_return (normalized returns)
         time_varying_known_reals: Optional[List[str]] = None,
         time_varying_unknown_reals: Optional[List[str]] = None,
         static_categoricals: Optional[List[str]] = None,
@@ -115,20 +115,25 @@ class CryptoTimeSeriesDataset:
                     print(f"[DATASET]   - Converting datetime column to datetime type")
                 self.data['datetime'] = pd.to_datetime(self.data['datetime'])
 
-        # Create time index (required by pytorch-forecasting)
+        # CRITICAL: Check and preserve existing time_idx (must be continuous across splits!)
         if 'time_idx' not in self.data.columns:
             if self.verbose:
-                print(f"[DATASET]   - Creating time index...")
+                print(f"[DATASET]   - WARNING: time_idx not found, creating new one")
+                print(f"[DATASET]   - NOTE: For proper training, time_idx should be created by preprocessor BEFORE splitting")
 
-            # Create time_idx per symbol
+            # Create time_idx per symbol (fallback only)
             self.data['time_idx'] = 0
 
             for symbol in self.data['symbol'].unique():
                 mask = self.data['symbol'] == symbol
                 self.data.loc[mask, 'time_idx'] = range(mask.sum())
         else:
+            # PRESERVE existing time_idx - DO NOT regenerate!
+            # This is critical for TFT to understand temporal continuity across train/val/test
             if self.verbose:
-                print(f"[DATASET]   - Time index already exists (range: {self.data['time_idx'].min()} to {self.data['time_idx'].max()})")
+                for symbol in self.data['symbol'].unique():
+                    sym_idx = self.data[self.data['symbol'] == symbol]['time_idx']
+                    print(f"[DATASET]   - {symbol} time_idx: {sym_idx.min()} to {sym_idx.max()} (preserved)")
 
         # Ensure symbol is string type
         if 'symbol' in self.data.columns:
@@ -164,29 +169,68 @@ class CryptoTimeSeriesDataset:
         return temporal_features
 
     def _get_price_volume_features(self) -> List[str]:
-        """Get list of price/volume features (unknown in advance)"""
-        # Include OHLCV and derived features
-        price_volume_patterns = [
-            'open', 'high', 'low', 'close', 'volume',
-            'returns', 'log_volume', 'price_range',
-            'trade', 'taker', 'quote',
-            '_lag_', 'rolling_'
+        """Get list of price/volume features (unknown in advance).
+
+        IMPORTANT: Excludes RAW OHLC and raw MAs which are NON-STATIONARY!
+        Only includes stationary features (returns, ratios, indicators).
+        """
+        # STATIONARY features only - NO raw prices or raw MAs!
+        stationary_patterns = [
+            'volume',  # Volume is scale-dependent but normalized
+            'return', 'log_return',  # Returns are stationary
+            '_ratio',  # All ratio features (price_sma_ratio, high_low_ratio, etc.)
+            '_position',  # Price position features (0-1 range)
+            '_lag_',  # Lagged returns
+            'roll_',  # Rolling statistics on returns
+            'rollmean_ratio',  # Price relative to rolling mean
+            'rsi',  # RSI is bounded 0-100
+            'macd', 'macd_pct',  # MACD (relative indicator)
+            'volatility', 'atr', 'atr_pct',  # Volatility measures
+            'bb_width', 'bb_position',  # Bollinger band stationary features
+            'parkinson', 'garman', 'realized_vol',  # Volatility estimators
+            'vol_ratio',  # Volatility ratios
+        ]
+
+        # Explicitly EXCLUDE these non-stationary patterns
+        exclude_patterns = [
+            # Raw OHLC prices (non-stationary - BTC $1k to $100k)
+            'open', 'high', 'low', 'close',
+            # Raw moving averages (also non-stationary)
+            'sma_10', 'sma_20', 'ema_12', 'ema_26',
+            'bb_middle', 'bb_upper', 'bb_lower',
+            # Raw quote volumes
+            'quote_volume', 'taker_buy_quote',
         ]
 
         price_volume_features = []
 
         for col in self.data.columns:
-            if any(pattern in col for pattern in price_volume_patterns):
-                price_volume_features.append(col)
+            # Check if matches any stationary pattern
+            if any(pattern in col for pattern in stationary_patterns):
+                # But NOT if it matches an exclude pattern exactly
+                is_excluded = False
+                for excl in exclude_patterns:
+                    # Exact match or column name starts with excluded pattern
+                    if col == excl or col.startswith(excl + '_'):
+                        is_excluded = True
+                        break
+                if not is_excluded:
+                    price_volume_features.append(col)
 
-        # Remove duplicates and ensure target is included
+        # Remove duplicates
         price_volume_features = list(set(price_volume_features))
 
+        # Ensure target is included (critical for training)
         if self.target_column not in price_volume_features:
             price_volume_features.append(self.target_column)
+            if self.verbose:
+                print(f"[DATASET]   - Added target column '{self.target_column}' to features")
 
         if self.verbose:
-            print(f"[DATASET]   - Auto-detected price/volume features: {len(price_volume_features)} features")
+            print(f"[DATASET]   - Auto-detected STATIONARY features: {len(price_volume_features)} features")
+            print(f"[DATASET]   - (Excluded raw OHLC, raw MAs - non-stationary)")
+            if self.target_column in price_volume_features:
+                print(f"[DATASET]   - Target column '{self.target_column}' included in features")
 
         return price_volume_features
 
@@ -280,9 +324,10 @@ def create_dataloaders(
     train_data: pd.DataFrame,
     val_data: pd.DataFrame,
     test_data: pd.DataFrame,
-    context_length: int = 2000,
-    prediction_length: int = 10,
+    context_length: int = 168,  # FIXED: Match model config
+    prediction_length: int = 24,  # FIXED: Match preprocessor's PREDICTION_HORIZON
     batch_size: int = 64,
+    target_column: str = 'target_return',  # FIXED: Use target_return
     verbose: bool = True
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
@@ -311,6 +356,7 @@ def create_dataloaders(
         train_data,
         context_length=context_length,
         prediction_length=prediction_length,
+        target_column=target_column,  # FIXED: Pass target_column
         verbose=verbose
     )
 
