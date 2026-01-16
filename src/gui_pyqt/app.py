@@ -267,11 +267,15 @@ class CryptoAIPredictorApp(QMainWindow):
         logger.error(f"Market data error: {error}")
 
     def _on_chart_click(self, symbol_data: Dict):
-        """Handle chart click"""
+        """Handle chart click - loads more data for multi-timescale analysis"""
         symbol = symbol_data.get('symbol', 'Unknown')
         self._update_status(f"Loading chart for {symbol}...")
 
-        worker = ChartDataWorker(self.api_client, symbol)
+        # Pass data_manager so ChartDataWorker can use local stored data if available
+        worker = ChartDataWorker(
+            self.api_client, symbol,
+            data_manager=self.data_manager
+        )
         worker.result.connect(lambda data: self._on_chart_data_loaded(symbol_data, data))
         worker.error.connect(self._on_chart_data_error)
         worker.finished.connect(lambda: self._cleanup_worker(worker))
@@ -283,7 +287,9 @@ class CryptoAIPredictorApp(QMainWindow):
         """Handle loaded chart data"""
         self.tabs.setCurrentIndex(0)  # Switch to Market tab
         self.chart_panel.show_chart(symbol_data, chart_data)
-        self._update_status(f"Displaying chart for {symbol_data.get('symbol')}")
+        self._update_status(
+            f"Displaying chart for {symbol_data.get('symbol')} ({len(chart_data)} candles)"
+        )
 
     def _on_chart_data_error(self, error: str):
         """Handle chart data loading error"""

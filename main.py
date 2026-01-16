@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    """Launch the Crypto AI Predictor application"""
+    """Launch the Crypto AI Predictor application (PyQt6)"""
     logger.info("=" * 70)
     logger.info(f"Starting {AppConfig.APP_NAME} v{AppConfig.VERSION}")
     logger.info("=" * 70)
@@ -54,21 +54,12 @@ def main():
         sys.exit(app.exec())
 
     except ImportError as e:
-        # Fall back to Tkinter if PyQt6 is not installed
-        logger.warning(f"PyQt6 not available ({e}), falling back to Tkinter GUI")
-        try:
-            import tkinter as tk
-            from src.gui.app import CryptoAIPredictorApp as TkinterApp
-
-            root = tk.Tk()
-            app = TkinterApp(root)
-            logger.info("Tkinter application initialized")
-            app.run()
-            app.cleanup()
-
-        except Exception as tk_error:
-            logger.error(f"Tkinter GUI also failed: {tk_error}", exc_info=True)
-            raise
+        logger.error(f"PyQt6 not available: {e}")
+        logger.error("Please install PyQt6: pip install PyQt6")
+        print("\nError: PyQt6 is required to run this application.")
+        print("Please install it with: pip install PyQt6")
+        input("\nPress Enter to exit...")
+        sys.exit(1)
 
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)

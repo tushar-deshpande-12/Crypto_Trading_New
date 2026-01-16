@@ -48,6 +48,9 @@ class ChartDataWorker(QThread):
     """
     Worker for fetching chart/candlestick data.
 
+    Fetches more data (2000 candles default) to support multi-timescale analysis.
+    Will try to use locally stored data first if available, then fall back to API.
+
     Emits:
         result: List of chart data dicts
         error: Error message string
@@ -57,26 +60,101 @@ class ChartDataWorker(QThread):
     error = pyqtSignal(str)
     finished = pyqtSignal()
 
-    def __init__(self, api_client, symbol: str, interval: str = "1h", limit: int = 500):
+    # Default limit increased for multi-timescale support
+    # 2000 1h candles = ~83 days of data, good for daily/weekly views
+    DEFAULT_LIMIT = 2000
+
+    def __init__(self, api_client, symbol: str, interval: str = "1h", limit: int = None,
+                 data_manager=None):
         super().__init__()
         self.api_client = api_client
         self.symbol = symbol
         self.interval = interval
-        self.limit = limit
+        self.limit = limit if limit is not None else self.DEFAULT_LIMIT
+        self.data_manager = data_manager
 
     def run(self):
         try:
-            chart_data = self.api_client.get_klines_formatted(
-                self.symbol, self.interval, self.limit
-            )
+            chart_data = None
+
+            # Try to load from local storage first (faster and more data)
+            if self.data_manager:
+                try:
+                    local_data = self._load_local_data()
+                    if local_data and len(local_data) >= self.limit:
+                        chart_data = local_data[-self.limit:]  # Use most recent data
+                except Exception:
+                    pass  # Fall through to API
+
+            # Fall back to API if no local data
+            if not chart_data:
+                chart_data = self.api_client.get_klines_formatted(
+                    self.symbol, self.interval, self.limit
+                )
+
             if chart_data:
                 self.result.emit(chart_data)
             else:
                 self.error.emit(f"Failed to load chart for {self.symbol}")
+
         except Exception as e:
             self.error.emit(f"Chart error for {self.symbol}: {e}")
         finally:
             self.finished.emit()
+
+    def _load_local_data(self) -> Optional[List[Dict]]:
+        """Try to load chart data from local storage"""
+        from pathlib import Path
+        import json
+        import pandas as pd
+
+        # Try to find dataset directory for this symbol
+        dataset_dir = Path("dataset") / self.symbol
+        if not dataset_dir.exists():
+            return None
+
+        # Find the most recent dataset with most data
+        best_dir = None
+        best_count = 0
+
+        for sub_dir in dataset_dir.iterdir():
+            if sub_dir.is_dir():
+                meta_path = sub_dir / "metadata.json"
+                if meta_path.exists():
+                    try:
+                        with open(meta_path, 'r') as f:
+                            meta = json.load(f)
+                        count = meta.get('candle_count', 0)
+                        if count > best_count:
+                            best_count = count
+                            best_dir = sub_dir
+                    except Exception:
+                        continue
+
+        if not best_dir:
+            return None
+
+        # Load data
+        data_path = best_dir / "data.json"
+        if data_path.exists():
+            with open(data_path, 'r') as f:
+                data = json.load(f)
+
+            # Convert to chart format
+            chart_data = []
+            for row in data:
+                chart_data.append({
+                    'datetime': row.get('datetime', row.get('timestamp')),
+                    'open': float(row.get('open', 0)),
+                    'high': float(row.get('high', 0)),
+                    'low': float(row.get('low', 0)),
+                    'close': float(row.get('close', 0)),
+                    'volume': float(row.get('volume', 0))
+                })
+
+            return chart_data
+
+        return None
 
 
 class DataFetchWorker(QThread):

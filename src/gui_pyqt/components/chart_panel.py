@@ -4,11 +4,16 @@ Chart Panel Component - Matplotlib candlestick chart with indicator overlays
 Displays OHLCV candlestick charts with selectable technical indicators.
 Supports subplot indicators (RSI, MACD, Stochastic) and overlay indicators
 (Bollinger Bands, Moving Averages, Ichimoku).
+
+Features:
+- Multi-timescale analysis (1h, 4h, 1d, 1w)
+- Dropdown to select which timescale's graph to render
+- Strategy signal markers (MACD crossover, Bollinger Bands, MA crossover)
 """
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
-    QScrollArea, QGroupBox, QPushButton, QFrame
+    QScrollArea, QGroupBox, QPushButton, QFrame, QComboBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -19,6 +24,14 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional
 from src.gui_pyqt.styles import get_chart_colors, COLORS
+
+# Available timescales for multi-timescale analysis
+TIMESCALES = {
+    '1h': {'label': '1 Hour (Raw)', 'resample': None, 'description': 'Original hourly data'},
+    '4h': {'label': '4 Hours', 'resample': '4h', 'description': '4-hour aggregated candles'},
+    '1d': {'label': '1 Day', 'resample': '1D', 'description': 'Daily aggregated candles'},
+    '1w': {'label': '1 Week', 'resample': '1W', 'description': 'Weekly aggregated candles'}
+}
 
 
 class ChartPanel(QWidget):
@@ -68,12 +81,15 @@ class ChartPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._chart_data = None
+        self._raw_chart_data = None  # Original 1h data
+        self._chart_data = None  # Currently displayed data (may be resampled)
         self._symbol_data = None
         self._selected_overlays = set()
         self._selected_subplots = {'volume'}  # Volume on by default
         self._selected_strategy = 'none'
         self._strategy_signals = []
+        self._selected_timescale = '1h'  # Default timescale
+        self._timescale_data = {}  # Cache for resampled data per timescale
         self._setup_ui()
 
     def _setup_ui(self):
@@ -109,8 +125,6 @@ class ChartPanel(QWidget):
 
     def _create_indicator_panel(self) -> QWidget:
         """Create the indicator selection panel"""
-        from PyQt6.QtWidgets import QComboBox
-
         panel = QFrame()
         panel.setMaximumWidth(220)
         panel.setMinimumWidth(180)
@@ -118,9 +132,27 @@ class ChartPanel(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
 
         # Title
-        title = QLabel("Indicators")
+        title = QLabel("Chart Settings")
         title.setProperty("class", "header")
         layout.addWidget(title)
+
+        # Timescale selection group
+        timescale_group = QGroupBox("Timescale Analysis")
+        timescale_layout = QVBoxLayout(timescale_group)
+
+        self.timescale_combo = QComboBox()
+        for key, info in TIMESCALES.items():
+            self.timescale_combo.addItem(info['label'], key)
+        self.timescale_combo.currentIndexChanged.connect(self._on_timescale_changed)
+        timescale_layout.addWidget(self.timescale_combo)
+
+        # Timescale description label
+        self.timescale_desc_label = QLabel(TIMESCALES['1h']['description'])
+        self.timescale_desc_label.setWordWrap(True)
+        self.timescale_desc_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 9px;")
+        timescale_layout.addWidget(self.timescale_desc_label)
+
+        layout.addWidget(timescale_group)
 
         # Strategy signals group
         strategy_group = QGroupBox("Strategy Signals")
@@ -178,6 +210,18 @@ class ChartPanel(QWidget):
 
         return panel
 
+    def _on_timescale_changed(self, index: int):
+        """Handle timescale selection change"""
+        self._selected_timescale = self.timescale_combo.currentData()
+        timescale_info = TIMESCALES.get(self._selected_timescale, TIMESCALES['1h'])
+        self.timescale_desc_label.setText(timescale_info['description'])
+
+        # Switch to the selected timescale data
+        if self._raw_chart_data is not None:
+            self._switch_timescale(self._selected_timescale)
+            self._generate_strategy_signals()
+            self._redraw_chart()
+
     def _on_strategy_changed(self, index: int):
         """Handle strategy selection change"""
         self._selected_strategy = self.strategy_combo.currentData()
@@ -196,24 +240,94 @@ class ChartPanel(QWidget):
             from src.ml.strategies import get_strategy
 
             strategy = get_strategy(self._selected_strategy)
-            signals = strategy.generate_signals(self._chart_data)
 
-            # Filter to only BUY and SELL signals
+            # Prepare data for strategy - ensure datetime is available as a column
+            # Strategies access row.get('datetime', None) so we need it as a column
+            strategy_data = self._chart_data.copy()
+            if isinstance(strategy_data.index, pd.DatetimeIndex):
+                strategy_data['datetime'] = strategy_data.index
+
+            # Validate strategy has required features
+            is_valid, missing = strategy.validate_data(strategy_data)
+            if not is_valid:
+                self.signal_stats_label.setText(f"Missing: {', '.join(missing[:3])}")
+                print(f"[CHART] Strategy '{self._selected_strategy}' missing features: {missing}")
+                return
+
+            signals = strategy.generate_signals(strategy_data)
+
+            # Filter to only BUY and SELL signals with confidence > 0
             self._strategy_signals = [
-                s for s in signals if s.action in ('BUY', 'SELL')
+                s for s in signals if s.action in ('BUY', 'SELL') and s.confidence > 0
             ]
 
             # Update stats
             buy_count = sum(1 for s in self._strategy_signals if s.action == 'BUY')
             sell_count = sum(1 for s in self._strategy_signals if s.action == 'SELL')
+            timescale_label = TIMESCALES[self._selected_timescale]['label']
             self.signal_stats_label.setText(
-                f"Signals: {len(self._strategy_signals)}\n"
+                f"Signals ({timescale_label}): {len(self._strategy_signals)}\n"
                 f"BUY: {buy_count} | SELL: {sell_count}"
             )
 
         except Exception as e:
             self.signal_stats_label.setText(f"Error: {str(e)[:50]}")
             print(f"[CHART] Strategy signal error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _switch_timescale(self, timescale: str):
+        """Switch to a different timescale view"""
+        if timescale not in self._timescale_data:
+            # Generate resampled data if not cached
+            self._timescale_data[timescale] = self._resample_data(self._raw_chart_data, timescale)
+
+        self._chart_data = self._timescale_data[timescale].copy()
+
+    def _resample_data(self, df: pd.DataFrame, timescale: str) -> pd.DataFrame:
+        """
+        Resample OHLCV data to a different timescale.
+
+        Args:
+            df: DataFrame with datetime index and OHLCV columns
+            timescale: Target timescale key (1h, 4h, 1d, 1w)
+
+        Returns:
+            Resampled DataFrame with recalculated indicators
+        """
+        timescale_info = TIMESCALES.get(timescale, TIMESCALES['1h'])
+        resample_rule = timescale_info['resample']
+
+        # If no resampling needed (1h raw data), just return copy with indicators
+        if resample_rule is None:
+            result = df.copy()
+            self._calculate_indicators(result)
+            return result
+
+        # Ensure we have a datetime index
+        if not isinstance(df.index, pd.DatetimeIndex):
+            if 'datetime' in df.columns:
+                df = df.set_index('datetime')
+            else:
+                raise ValueError("DataFrame must have datetime index or datetime column")
+
+        # Resample OHLCV data
+        resampled = df.resample(resample_rule).agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        }).dropna()
+
+        # Reset index to have datetime as column for consistency
+        resampled = resampled.reset_index()
+        resampled = resampled.set_index('datetime')
+
+        # Recalculate all indicators for the new timescale
+        self._calculate_indicators(resampled)
+
+        return resampled
 
     def _on_overlay_changed(self, key: str, state: int):
         """Handle overlay checkbox change"""
@@ -231,45 +345,67 @@ class ChartPanel(QWidget):
 
     def show_chart(self, symbol_data: Dict, chart_data: List[Dict]):
         """
-        Display candlestick chart for symbol.
+        Display candlestick chart for symbol with multi-timescale support.
 
         Args:
             symbol_data: Dict with symbol info (symbol, price, etc.)
             chart_data: List of OHLCV dicts with datetime/timestamp, open, high, low, close, volume
         """
         self._symbol_data = symbol_data
-        self._chart_data = pd.DataFrame(chart_data)
+
+        # Store raw data
+        raw_df = pd.DataFrame(chart_data)
 
         # Handle both 'datetime' and 'timestamp' column names
-        if 'timestamp' in self._chart_data.columns:
-            self._chart_data['datetime'] = pd.to_datetime(self._chart_data['timestamp'])
-            self._chart_data.set_index('datetime', inplace=True)
-        elif 'datetime' in self._chart_data.columns:
-            self._chart_data['datetime'] = pd.to_datetime(self._chart_data['datetime'])
-            self._chart_data.set_index('datetime', inplace=True)
+        if 'timestamp' in raw_df.columns:
+            raw_df['datetime'] = pd.to_datetime(raw_df['timestamp'])
+        elif 'datetime' in raw_df.columns:
+            raw_df['datetime'] = pd.to_datetime(raw_df['datetime'])
 
-        # Calculate all technical indicators
-        self._calculate_indicators()
+        # Set datetime as index
+        raw_df.set_index('datetime', inplace=True)
+
+        # Store raw data for multi-timescale analysis
+        self._raw_chart_data = raw_df.copy()
+
+        # Clear timescale cache when new data arrives
+        self._timescale_data = {}
+
+        # Generate data for selected timescale (triggers indicator calculation)
+        self._switch_timescale(self._selected_timescale)
 
         # Regenerate strategy signals with new data
         self._generate_strategy_signals()
 
-        # Update title
+        # Update title with timescale info
         symbol = symbol_data.get('symbol', 'Unknown')
         price = symbol_data.get('price', 0)
         change = symbol_data.get('price_change_pct', 0)
         change_color = COLORS['chart_green'] if change >= 0 else COLORS['chart_red']
+        timescale_label = TIMESCALES[self._selected_timescale]['label']
 
         self.title_label.setText(
             f"{symbol} | ${price:,.2f} | "
-            f"<span style='color:{change_color}'>{change:+.2f}%</span>"
+            f"<span style='color:{change_color}'>{change:+.2f}%</span> | "
+            f"<span style='color:{COLORS['text_secondary']}'>{timescale_label}</span>"
         )
 
         self._redraw_chart()
 
-    def _calculate_indicators(self):
-        """Calculate all technical indicators from raw OHLCV data"""
-        df = self._chart_data
+    def _calculate_indicators(self, df: pd.DataFrame = None):
+        """
+        Calculate all technical indicators from OHLCV data.
+
+        This method calculates indicators needed for:
+        - Chart overlays (MA, Bollinger, Keltner, Ichimoku)
+        - Chart subplots (RSI, MACD, Stochastic, ADX, MFI)
+        - Trading strategies (MACD crossover, Bollinger, MA crossover)
+
+        Args:
+            df: DataFrame to calculate indicators on. If None, uses self._chart_data
+        """
+        if df is None:
+            df = self._chart_data
         if df is None or len(df) == 0:
             return
 
@@ -284,11 +420,24 @@ class ChartPanel(QWidget):
         df['ema_12'] = close.ewm(span=12, adjust=False).mean()
         df['ema_26'] = close.ewm(span=26, adjust=False).mean()
 
+        # === Strategy-required ratio columns (for MA Crossover strategy) ===
+        # These ratios are needed by MACrossoverStrategy
+        df['sma10_sma20_ratio'] = (df['sma_10'] / df['sma_20'].replace(0, np.nan)) - 1.0  # Normalized around 0
+        df['price_sma10_ratio'] = (close / df['sma_10'].replace(0, np.nan)) - 1.0  # Price vs SMA10
+        df['price_sma20_ratio'] = (close / df['sma_20'].replace(0, np.nan)) - 1.0  # Price vs SMA20
+
         # Bollinger Bands (20-period, 2 std dev)
         df['bb_middle'] = close.rolling(window=20).mean()
         bb_std = close.rolling(window=20).std()
         df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
         df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+
+        # === Strategy-required Bollinger columns (for Bollinger strategy) ===
+        # bb_position: -1 (at lower band) to +1 (at upper band)
+        bb_range = (df['bb_upper'] - df['bb_lower']).replace(0, np.nan)
+        df['bb_position'] = ((close - df['bb_lower']) / bb_range) * 2 - 1
+        # bb_width: Width of bands relative to middle band
+        df['bb_width'] = bb_range / df['bb_middle'].replace(0, np.nan)
 
         # Keltner Channels (20-period, 2 ATR)
         tr = pd.concat([
@@ -308,7 +457,7 @@ class ChartPanel(QWidget):
         rs = gain / loss.replace(0, np.nan)
         df['rsi'] = 100 - (100 / (1 + rs))
 
-        # MACD
+        # MACD (for MACD Crossover strategy)
         df['macd'] = df['ema_12'] - df['ema_26']
         df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
         df['macd_histogram'] = df['macd'] - df['macd_signal']
@@ -316,7 +465,8 @@ class ChartPanel(QWidget):
         # Stochastic Oscillator (14-period)
         lowest_low = low.rolling(window=14).min()
         highest_high = high.rolling(window=14).max()
-        df['stoch_k'] = 100 * (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan)
+        stoch_range = (highest_high - lowest_low).replace(0, np.nan)
+        df['stoch_k'] = 100 * (close - lowest_low) / stoch_range
         df['stoch_d'] = df['stoch_k'].rolling(window=3).mean()
 
         # ADX (14-period)
@@ -684,9 +834,13 @@ class ChartPanel(QWidget):
         self.canvas.draw()
 
     def clear(self):
-        """Clear the chart"""
+        """Clear the chart and reset all data"""
+        self._raw_chart_data = None
         self._chart_data = None
         self._symbol_data = None
+        self._timescale_data = {}
+        self._strategy_signals = []
         self.figure.clear()
         self.canvas.draw()
         self.title_label.setText("Select a symbol to view chart")
+        self.signal_stats_label.setText("Select strategy to see signals")
