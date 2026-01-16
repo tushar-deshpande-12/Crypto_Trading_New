@@ -179,7 +179,109 @@ class CryptoPreprocessor:
             # Volume features
             sym_df['volume_sma'] = sym_df['volume'].rolling(20).mean()
             sym_df['volume_ratio'] = sym_df['volume'] / sym_df['volume_sma']
-            
+
+            # ============================================================
+            # NEW TECHNICAL INDICATORS (10 additional indicators)
+            # ============================================================
+
+            # 1. STOCHASTIC OSCILLATOR (%K and %D) - bounded 0-100
+            low_14 = sym_df['low'].rolling(14).min()
+            high_14 = sym_df['high'].rolling(14).max()
+            stoch_range = (high_14 - low_14).replace(0, np.nan)
+            sym_df['stoch_k'] = 100 * (sym_df['close'] - low_14) / stoch_range
+            sym_df['stoch_d'] = sym_df['stoch_k'].rolling(3).mean()
+
+            # 2. WILLIAMS %R - bounded -100 to 0 (normalized to 0-1 for model)
+            sym_df['williams_r'] = -100 * (high_14 - sym_df['close']) / stoch_range
+            sym_df['williams_r_norm'] = (sym_df['williams_r'] + 100) / 100  # Normalize to 0-1
+
+            # 3. CCI (Commodity Channel Index) - normalized to -1 to 1
+            typical_price = (sym_df['high'] + sym_df['low'] + sym_df['close']) / 3
+            sma_tp = typical_price.rolling(20).mean()
+            mean_deviation = typical_price.rolling(20).apply(lambda x: np.abs(x - x.mean()).mean())
+            cci_raw = (typical_price - sma_tp) / (0.015 * mean_deviation).replace(0, np.nan)
+            sym_df['cci'] = cci_raw.clip(-200, 200) / 200  # Normalize to -1 to 1
+
+            # 4. OBV (On-Balance Volume) Rate of Change - stationary
+            price_direction = np.sign(sym_df['close'].diff())
+            obv = (price_direction * sym_df['volume']).fillna(0).cumsum()
+            sym_df['obv_roc'] = obv.pct_change(14).clip(-5, 5)  # 14-period ROC, clipped
+            sym_df['obv_sma_ratio'] = obv / obv.rolling(20).mean().replace(0, np.nan)
+
+            # 5. ADX (Average Directional Index) - bounded 0-100, normalized to 0-1
+            tr = np.maximum(
+                sym_df['high'] - sym_df['low'],
+                np.maximum(
+                    np.abs(sym_df['high'] - sym_df['close'].shift(1)),
+                    np.abs(sym_df['low'] - sym_df['close'].shift(1))
+                )
+            )
+            atr_14_adx = tr.rolling(14).mean()
+
+            high_diff = sym_df['high'].diff()
+            low_diff = -sym_df['low'].diff()
+            plus_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0)
+            minus_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0)
+
+            plus_di = 100 * pd.Series(plus_dm).rolling(14).mean() / atr_14_adx.replace(0, np.nan)
+            minus_di = 100 * pd.Series(minus_dm).rolling(14).mean() / atr_14_adx.replace(0, np.nan)
+
+            dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di).replace(0, np.nan)
+            sym_df['adx'] = dx.rolling(14).mean() / 100  # Normalize to 0-1
+            sym_df['plus_di'] = plus_di / 100  # Normalize to 0-1
+            sym_df['minus_di'] = minus_di / 100  # Normalize to 0-1
+            sym_df['di_diff'] = (plus_di - minus_di) / 100  # Directional difference
+
+            # 6. MFI (Money Flow Index) - bounded 0-100, normalized to 0-1
+            mfi_typical_price = (sym_df['high'] + sym_df['low'] + sym_df['close']) / 3
+            raw_money_flow = mfi_typical_price * sym_df['volume']
+            positive_flow = raw_money_flow.where(mfi_typical_price > mfi_typical_price.shift(1), 0)
+            negative_flow = raw_money_flow.where(mfi_typical_price < mfi_typical_price.shift(1), 0)
+            positive_sum = positive_flow.rolling(14).sum()
+            negative_sum = negative_flow.rolling(14).sum().replace(0, np.nan)
+            money_ratio = positive_sum / negative_sum
+            sym_df['mfi'] = (100 - (100 / (1 + money_ratio))) / 100  # Normalize to 0-1
+
+            # 7. AROON (Up, Down, Oscillator) - bounded 0-100, normalized
+            aroon_period = 25
+            sym_df['aroon_up'] = sym_df['high'].rolling(aroon_period + 1).apply(
+                lambda x: x.argmax() / aroon_period, raw=False
+            )
+            sym_df['aroon_down'] = sym_df['low'].rolling(aroon_period + 1).apply(
+                lambda x: x.argmin() / aroon_period, raw=False
+            )
+            sym_df['aroon_osc'] = sym_df['aroon_up'] - sym_df['aroon_down']  # -1 to 1
+
+            # 8. KELTNER CHANNELS - position within bands (0-1)
+            keltner_ema = sym_df['close'].ewm(span=20).mean()
+            keltner_atr = tr.rolling(10).mean()  # 10-period ATR for Keltner
+            keltner_upper = keltner_ema + (2 * keltner_atr)
+            keltner_lower = keltner_ema - (2 * keltner_atr)
+            keltner_range = (keltner_upper - keltner_lower).replace(0, np.nan)
+            sym_df['keltner_position'] = (sym_df['close'] - keltner_lower) / keltner_range
+            sym_df['keltner_width'] = keltner_range / keltner_ema  # Width relative to price
+
+            # 9. ICHIMOKU CLOUD - price ratios to components (stationary)
+            tenkan_sen = (sym_df['high'].rolling(9).max() + sym_df['low'].rolling(9).min()) / 2
+            kijun_sen = (sym_df['high'].rolling(26).max() + sym_df['low'].rolling(26).min()) / 2
+            senkou_a = (tenkan_sen + kijun_sen) / 2
+            senkou_b = (sym_df['high'].rolling(52).max() + sym_df['low'].rolling(52).min()) / 2
+
+            sym_df['ichimoku_tenkan_ratio'] = sym_df['close'] / tenkan_sen.replace(0, np.nan)
+            sym_df['ichimoku_kijun_ratio'] = sym_df['close'] / kijun_sen.replace(0, np.nan)
+            sym_df['ichimoku_cloud_ratio'] = sym_df['close'] / senkou_a.replace(0, np.nan)
+            sym_df['ichimoku_tk_cross'] = (tenkan_sen - kijun_sen) / sym_df['close']  # TK cross signal
+            sym_df['ichimoku_cloud_thickness'] = (senkou_a - senkou_b) / sym_df['close']  # Cloud thickness
+
+            # 10. ROC (Rate of Change) - multiple periods
+            sym_df['roc_6'] = sym_df['close'].pct_change(6)
+            sym_df['roc_12'] = sym_df['close'].pct_change(12)
+            sym_df['roc_24'] = sym_df['close'].pct_change(24)
+
+            # ============================================================
+            # END OF NEW INDICATORS
+            # ============================================================
+
             # REGRESSION TARGET: Predict 24-hour forward RETURN
             # Hourly returns are random noise (autocorr=-0.001, SNR=0.04)
             # Longer horizons have more predictable structure
@@ -389,7 +491,19 @@ class CryptoPreprocessor:
                         'sma10_sma20_ratio',  # Price relative to MAs (stationary)
                         'rsi', 'macd', 'macd_signal', 'macd_pct',  # Momentum indicators
                         'bb_width', 'bb_position',  # Bollinger bands (stationary versions)
-                        'volatility', 'atr', 'volume_sma', 'volume_ratio']
+                        'volatility', 'atr', 'volume_sma', 'volume_ratio',
+                        # NEW INDICATORS (10 additional)
+                        'stoch_k', 'stoch_d',  # Stochastic Oscillator
+                        'williams_r_norm',  # Williams %R (normalized)
+                        'cci',  # CCI (normalized)
+                        'obv_roc', 'obv_sma_ratio',  # OBV indicators
+                        'adx', 'plus_di', 'minus_di', 'di_diff',  # ADX and DI
+                        'mfi',  # Money Flow Index
+                        'aroon_up', 'aroon_down', 'aroon_osc',  # Aroon
+                        'keltner_position', 'keltner_width',  # Keltner Channels
+                        'ichimoku_tenkan_ratio', 'ichimoku_kijun_ratio',  # Ichimoku
+                        'ichimoku_cloud_ratio', 'ichimoku_tk_cross', 'ichimoku_cloud_thickness',
+                        'roc_6', 'roc_12', 'roc_24']  # Rate of Change
 
         # Raw data features that need normalization (often have huge values!)
         raw_data_features = ['quote_volume', 'taker_buy_quote_volume',

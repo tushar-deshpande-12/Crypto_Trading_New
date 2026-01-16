@@ -4,14 +4,12 @@ Unified application for cryptocurrency tracking, data fetching, and AI predictio
 """
 
 import sys
-import tkinter as tk
 import logging
 from pathlib import Path
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.gui.app import CryptoAIPredictorApp
 from src.core.config import AppConfig
 
 # Configure logging
@@ -37,18 +35,40 @@ def main():
     logger.info("=" * 70)
 
     try:
-        # Create root window
-        root = tk.Tk()
+        # Import PyQt6 application
+        from PyQt6.QtWidgets import QApplication
+        from src.gui_pyqt.app import CryptoAIPredictorApp
 
-        # Create and run application
-        app = CryptoAIPredictorApp(root)
+        # Create application
+        app = QApplication(sys.argv)
+        app.setApplicationName(AppConfig.APP_NAME)
+        app.setApplicationVersion(AppConfig.VERSION)
+
+        # Create main window
+        window = CryptoAIPredictorApp()
+        window.show()
+
         logger.info("Application initialized successfully")
 
-        # Start main loop
-        app.run()
+        # Start event loop
+        sys.exit(app.exec())
 
-        # Cleanup
-        app.cleanup()
+    except ImportError as e:
+        # Fall back to Tkinter if PyQt6 is not installed
+        logger.warning(f"PyQt6 not available ({e}), falling back to Tkinter GUI")
+        try:
+            import tkinter as tk
+            from src.gui.app import CryptoAIPredictorApp as TkinterApp
+
+            root = tk.Tk()
+            app = TkinterApp(root)
+            logger.info("Tkinter application initialized")
+            app.run()
+            app.cleanup()
+
+        except Exception as tk_error:
+            logger.error(f"Tkinter GUI also failed: {tk_error}", exc_info=True)
+            raise
 
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
@@ -60,7 +80,7 @@ def main():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("  Crypto AI Predictor v3.0")
+    print(f"  {AppConfig.APP_NAME} v{AppConfig.VERSION}")
     print("  Launching unified application...")
     print("=" * 60)
     print()

@@ -4,15 +4,22 @@ Tests model predictions on historical data with realistic trading simulation
 
 IMPORTANT: This backtester works with RETURN predictions (target_return)
 not raw price predictions. It converts predicted returns to price movements.
+
+Supports both:
+1. Model prediction-based backtesting (original)
+2. Strategy-based backtesting (new - uses pluggable strategies)
 """
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple, Optional, Union, TYPE_CHECKING
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 from pathlib import Path
 from src.ml.training.model_evaluator import safe_direction_accuracy
+
+if TYPE_CHECKING:
+    from src.ml.strategies.base import BaseStrategy, TradeSignal
 
 
 @dataclass
@@ -349,6 +356,201 @@ class CryptoBacktester:
 
         if self.verbose:
             self._print_results(results)
+
+        return results
+
+    def run_backtest_with_strategy(
+        self,
+        strategy: 'BaseStrategy',
+        data: pd.DataFrame,
+        price_column: str = 'close'
+    ) -> 'BacktestResults':
+        """
+        Run backtest using a pluggable trading strategy.
+
+        This method uses a strategy object to generate buy/sell signals
+        from the data, then simulates trading based on those signals.
+
+        Args:
+            strategy: Strategy instance (implements BaseStrategy)
+            data: DataFrame with OHLCV and technical indicators
+            price_column: Column name for prices (default: 'close')
+
+        Returns:
+            BacktestResults with all metrics
+        """
+        from src.ml.strategies.base import BaseStrategy, TradeSignal
+
+        if self.verbose:
+            print(f"\n[BACKTEST] Running strategy backtest...")
+            print(f"[BACKTEST]   - Strategy: {strategy.name}")
+            print(f"[BACKTEST]   - Description: {strategy.description}")
+            print(f"[BACKTEST]   - Data samples: {len(data)}")
+
+        # Validate data has required features
+        is_valid, missing = strategy.validate_data(data)
+        if not is_valid:
+            raise ValueError(f"Data missing required features for strategy '{strategy.name}': {missing}")
+
+        # Generate signals from strategy
+        signals = strategy.generate_signals(data)
+
+        if self.verbose:
+            buy_count = sum(1 for s in signals if s.action == 'BUY')
+            sell_count = sum(1 for s in signals if s.action == 'SELL')
+            hold_count = sum(1 for s in signals if s.action == 'HOLD')
+            print(f"[BACKTEST]   - Signals generated: {len(signals)}")
+            print(f"[BACKTEST]   - BUY: {buy_count}, SELL: {sell_count}, HOLD: {hold_count}")
+
+        # Initialize portfolio
+        cash = self.config.initial_capital
+        position = 0.0
+        trades = []
+        equity_values = []
+
+        # Get prices and timestamps
+        prices = data[price_column].values
+        timestamps = data['datetime'] if 'datetime' in data.columns else pd.RangeIndex(len(data))
+
+        # Track for buy-and-hold comparison
+        initial_price = prices[0]
+        buy_hold_position = cash / initial_price
+
+        # Cooldown tracking
+        min_confidence = strategy.config.min_confidence if hasattr(strategy, 'config') else 0.5
+        cooldown = 0
+
+        # Execute trades based on signals
+        for i, signal in enumerate(signals):
+            current_price = prices[i]
+            timestamp = timestamps.iloc[i] if hasattr(timestamps, 'iloc') else timestamps[i]
+
+            # Current portfolio value
+            portfolio_value = cash + (position * current_price)
+
+            action = 'HOLD'
+            trade_amount = 0.0
+            trade_value = 0.0
+
+            # Cooldown period
+            if cooldown > 0:
+                cooldown -= 1
+            else:
+                # Check if signal meets confidence threshold
+                if signal.confidence >= min_confidence:
+                    if signal.action == 'BUY' and cash > self.config.min_trade_amount:
+                        # Buy with available cash
+                        trade_value = cash * strategy.config.position_size if hasattr(strategy, 'config') else cash * 0.95
+                        fee = trade_value * self.config.trade_fee
+                        trade_amount = (trade_value - fee) / current_price
+
+                        position += trade_amount
+                        cash -= trade_value
+                        action = 'BUY'
+                        cooldown = strategy.config.cooldown_periods if hasattr(strategy, 'config') else 1
+
+                    elif signal.action == 'SELL' and position > 0:
+                        # Sell all position
+                        trade_amount = position
+                        trade_value = trade_amount * current_price
+                        fee = trade_value * self.config.trade_fee
+
+                        cash += (trade_value - fee)
+                        position = 0.0
+                        action = 'SELL'
+                        cooldown = strategy.config.cooldown_periods if hasattr(strategy, 'config') else 1
+
+            # Record trade
+            portfolio_value_after = cash + (position * current_price)
+
+            # Get actual next price for prediction accuracy (if available)
+            actual_next = prices[i + 1] if i < len(prices) - 1 else current_price
+
+            trade = Trade(
+                timestamp=timestamp,
+                action=action,
+                price=current_price,
+                amount=trade_amount,
+                value=trade_value,
+                balance_after=portfolio_value_after,
+                prediction=signal.price,
+                actual_next=actual_next
+            )
+            trades.append(trade)
+            equity_values.append(portfolio_value_after)
+
+        # Final portfolio value
+        final_price = prices[-1]
+        final_value = cash + (position * final_price)
+
+        # Buy and hold final value
+        buy_hold_final = buy_hold_position * final_price
+
+        # For strategy backtest, prediction accuracy metrics are based on signals vs actual moves
+        predictions = np.array([s.price for s in signals])
+        actual_prices = prices
+
+        # Calculate metrics
+        results = self._calculate_metrics(
+            trades=trades,
+            equity_values=equity_values,
+            timestamps=timestamps,
+            predictions=predictions,
+            actual_prices=actual_prices,
+            initial_capital=self.config.initial_capital,
+            final_value=final_value,
+            buy_hold_final=buy_hold_final
+        )
+
+        if self.verbose:
+            print(f"\n[BACKTEST] Strategy: {strategy.name}")
+            self._print_results(results)
+
+        return results
+
+    def compare_strategies(
+        self,
+        strategies: List['BaseStrategy'],
+        data: pd.DataFrame,
+        price_column: str = 'close'
+    ) -> Dict[str, 'BacktestResults']:
+        """
+        Compare multiple strategies on the same data.
+
+        Args:
+            strategies: List of strategy instances
+            data: DataFrame with OHLCV and indicators
+            price_column: Column name for prices
+
+        Returns:
+            Dict mapping strategy name to BacktestResults
+        """
+        results = {}
+
+        if self.verbose:
+            print(f"\n[BACKTEST] Comparing {len(strategies)} strategies...")
+
+        for strategy in strategies:
+            try:
+                result = self.run_backtest_with_strategy(strategy, data, price_column)
+                results[strategy.name] = result
+            except Exception as e:
+                print(f"[BACKTEST] Error running strategy '{strategy.name}': {e}")
+                continue
+
+        # Print comparison summary
+        if self.verbose and results:
+            print(f"\n{'='*80}")
+            print(f"STRATEGY COMPARISON SUMMARY")
+            print(f"{'='*80}")
+            print(f"{'Strategy':<20} {'Return %':>12} {'Win Rate':>12} {'Trades':>10} {'vs B&H':>12}")
+            print(f"{'-'*80}")
+
+            for name, res in sorted(results.items(), key=lambda x: x[1].total_return_pct, reverse=True):
+                print(f"{name:<20} {res.total_return_pct:>+11.2f}% {res.win_rate:>11.1f}% "
+                      f"{res.num_trades:>10} {res.excess_return:>+11.2f}")
+
+            print(f"{'='*80}")
 
         return results
 

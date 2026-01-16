@@ -13,3 +13,6 @@ scikit-learn>=1.3.0
 numpy>=1.24.0
 tqdm>=4.65.0
 pyyaml>=6.0
+
+# GUI dependencies (PyQt6)
+PyQt6>=6.4.0
