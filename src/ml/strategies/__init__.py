@@ -13,6 +13,16 @@ from .stochastic_strategy import StochasticStrategy
 from .prediction_strategy import PredictionStrategy
 from .ensemble import EnsembleStrategy, create_ensemble
 
+# Combo strategies (famous indicator combinations)
+from .combo_strategies import (
+    RSIMACDComboStrategy,
+    BollingerRSIComboStrategy,
+    MACDMAComboStrategy,
+    StochRSIComboStrategy,
+    TripleEMAStrategy,
+    ADXMACDStrategy,
+)
+
 __all__ = [
     # Base classes
     'BaseStrategy',
@@ -25,7 +35,7 @@ __all__ = [
     'list_strategies',
     'register_strategy',
 
-    # Strategies
+    # Basic Strategies
     'RSIStrategy',
     'MACDStrategy',
     'BollingerStrategy',
@@ -33,5 +43,13 @@ __all__ = [
     'StochasticStrategy',
     'PredictionStrategy',
     'EnsembleStrategy',
-    'create_ensemble'
+    'create_ensemble',
+
+    # Combo Strategies
+    'RSIMACDComboStrategy',
+    'BollingerRSIComboStrategy',
+    'MACDMAComboStrategy',
+    'StochRSIComboStrategy',
+    'TripleEMAStrategy',
+    'ADXMACDStrategy',
 ]

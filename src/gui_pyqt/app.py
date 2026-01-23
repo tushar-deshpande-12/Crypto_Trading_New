@@ -17,10 +17,14 @@ from PyQt6.QtCore import Qt, QTimer
 
 from src.core.config import AppConfig
 from src.gui_pyqt.styles import apply_stylesheet, COLORS
-from src.gui_pyqt.components import SymbolTable, ChartPanel, DataPanel, MLPanel, BacktestPanel
+from src.gui_pyqt.components import (
+    SymbolTable, ChartPanel, InteractiveChartPanel,
+    DataPanel, MLPanel, BacktestPanel, SignalScannerPanel, PredictionPanel,
+    ProphetPanel
+)
 from src.gui_pyqt.workers import (
-    MarketDataWorker, ChartDataWorker, DataFetchWorker,
-    TrainingWorker, PredictionWorker, BacktestWorker
+    MarketDataWorker, ChartDataWorker, CCXTChartWorker, DataFetchWorker,
+    TrainingWorker, PredictionWorker, BacktestWorker, SignalScannerWorker
 )
 from src.api.binance_client import BinanceAPIClient
 from src.data.manager import DataManager
@@ -73,6 +77,7 @@ class CryptoAIPredictorApp(QMainWindow):
         # State
         self.market_data = []
         self._active_workers = []
+        self._current_chart_symbol = None
 
         # Setup UI
         self._create_ui()
@@ -101,8 +106,11 @@ class CryptoAIPredictorApp(QMainWindow):
 
         # Create tabs
         self._create_market_tab()
+        self._create_prediction_tab()
+        self._create_signal_scanner_tab()
         self._create_data_tab()
         self._create_ml_tab()
+        self._create_prophet_tab()
         self._create_backtest_tab()
 
         # Status bar
@@ -145,14 +153,37 @@ class CryptoAIPredictorApp(QMainWindow):
         self.symbol_table.setMaximumWidth(600)
         splitter.addWidget(self.symbol_table)
 
-        # Right: Chart panel
-        self.chart_panel = ChartPanel()
+        # Right: Interactive chart panel (Plotly-based with pivot/S&R levels)
+        self.chart_panel = InteractiveChartPanel()
+        self.chart_panel.data_requested.connect(self._on_chart_data_requested)
         splitter.addWidget(self.chart_panel)
 
         splitter.setSizes([500, 900])
         layout.addWidget(splitter)
 
         self.tabs.addTab(tab, "Market Overview")
+
+    def _create_prediction_tab(self):
+        """Create Prediction tab for strategy-based recommendations"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        self.prediction_panel = PredictionPanel()
+        layout.addWidget(self.prediction_panel)
+
+        self.tabs.addTab(tab, "Prediction")
+
+    def _create_signal_scanner_tab(self):
+        """Create Signal Scanner tab"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        self.signal_scanner_panel = SignalScannerPanel()
+        layout.addWidget(self.signal_scanner_panel)
+
+        self.tabs.addTab(tab, "Signal Scanner")
 
     def _create_data_tab(self):
         """Create Data Pipeline tab"""
@@ -178,7 +209,7 @@ class CryptoAIPredictorApp(QMainWindow):
         self.tabs.addTab(tab, "Data Pipeline")
 
     def _create_ml_tab(self):
-        """Create AI Training tab"""
+        """Create Direction Prediction tab (LSTM-based)"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -186,7 +217,18 @@ class CryptoAIPredictorApp(QMainWindow):
         self.ml_panel = MLPanel()
         layout.addWidget(self.ml_panel)
 
-        self.tabs.addTab(tab, "AI Training")
+        self.tabs.addTab(tab, "Direction Prediction")
+
+    def _create_prophet_tab(self):
+        """Create Prophet Forecasting tab"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        self.prophet_panel = ProphetPanel()
+        layout.addWidget(self.prophet_panel)
+
+        self.tabs.addTab(tab, "Prophet Forecast")
 
     def _create_backtest_tab(self):
         """Create Backtesting tab"""
@@ -233,6 +275,10 @@ class CryptoAIPredictorApp(QMainWindow):
         # Backtest panel signals
         self.backtest_panel.backtest_requested.connect(self._on_run_backtest)
 
+        # Signal Scanner panel signals
+        self.signal_scanner_panel.scan_requested.connect(self._on_signal_scan_requested)
+        self.signal_scanner_panel.symbol_selected.connect(self._on_scanner_symbol_selected)
+
     def _update_status(self, message: str):
         """Update status bar message"""
         self.status_label.setText(message)
@@ -261,32 +307,76 @@ class CryptoAIPredictorApp(QMainWindow):
         symbols = [d.get('symbol', '') for d in data]
         self.backtest_panel.set_symbols(symbols[:100])  # Limit to top 100
 
+        # Update prediction panel with all available symbols
+        self.prediction_panel.set_symbols(symbols)
+
+        # Update signal scanner with market data
+        self.signal_scanner_panel.set_market_data(data)
+
     def _on_market_data_error(self, error: str):
         """Handle market data loading error"""
         self._update_status(f"Error: {error}")
         logger.error(f"Market data error: {error}")
 
     def _on_chart_click(self, symbol_data: Dict):
-        """Handle chart click - loads more data for multi-timescale analysis"""
+        """Handle chart click - sets symbol and triggers data load via CCXT"""
         symbol = symbol_data.get('symbol', 'Unknown')
-        self._update_status(f"Loading chart for {symbol}...")
+        price = symbol_data.get('price', 0)
+        change_pct = symbol_data.get('price_change_pct', 0)
 
-        # Pass data_manager so ChartDataWorker can use local stored data if available
-        worker = ChartDataWorker(
-            self.api_client, symbol,
-            data_manager=self.data_manager
-        )
-        worker.result.connect(lambda data: self._on_chart_data_loaded(symbol_data, data))
+        self._update_status(f"Loading chart for {symbol}...")
+        self.tabs.setCurrentIndex(0)  # Switch to Market tab
+
+        # Set symbol on interactive chart (this will trigger data_requested signal)
+        self.chart_panel.set_symbol(symbol, price, change_pct)
+
+        # Store for later use
+        self._current_chart_symbol = symbol_data
+
+        # Request initial data with default settings
+        self._on_chart_data_requested(symbol, '1h', 500)
+
+    def _on_chart_data_requested(self, symbol: str, timeframe: str, limit: int):
+        """Handle chart data request using CCXT"""
+        self._update_status(f"Fetching {limit} {timeframe} candles for {symbol}...")
+
+        worker = CCXTChartWorker(symbol, timeframe, limit, exchange_id='binance')
+        worker.progress.connect(lambda c, t, m: self._update_status(m))
+        worker.result.connect(self._on_ccxt_chart_loaded)
         worker.error.connect(self._on_chart_data_error)
         worker.finished.connect(lambda: self._cleanup_worker(worker))
 
         self._active_workers.append(worker)
         worker.start()
 
+    def _on_ccxt_chart_loaded(self, df):
+        """Handle CCXT chart data loaded (DataFrame)"""
+        if df is not None and len(df) > 0:
+            self.chart_panel.set_data(df)
+            self._update_status(f"Chart loaded: {len(df)} candles")
+        else:
+            self._update_status("No chart data received")
+
     def _on_chart_data_loaded(self, symbol_data: Dict, chart_data: List[Dict]):
-        """Handle loaded chart data"""
+        """Handle loaded chart data (legacy compatibility)"""
         self.tabs.setCurrentIndex(0)  # Switch to Market tab
-        self.chart_panel.show_chart(symbol_data, chart_data)
+
+        # Convert list of dicts to DataFrame for InteractiveChartPanel
+        import pandas as pd
+        df = pd.DataFrame(chart_data)
+        if 'timestamp' in df.columns:
+            df['datetime'] = pd.to_datetime(df['timestamp'])
+        elif 'datetime' in df.columns:
+            df['datetime'] = pd.to_datetime(df['datetime'])
+        df.set_index('datetime', inplace=True)
+
+        self.chart_panel.set_symbol(
+            symbol_data.get('symbol', ''),
+            symbol_data.get('price', 0),
+            symbol_data.get('price_change_pct', 0)
+        )
+        self.chart_panel.set_data(df)
+
         self._update_status(
             f"Displaying chart for {symbol_data.get('symbol')} ({len(chart_data)} candles)"
         )
@@ -472,14 +562,59 @@ class CryptoAIPredictorApp(QMainWindow):
     def _on_backtest_complete(self, results):
         """Handle backtest completion"""
         self.backtest_panel.set_running(False)
-        self.backtest_panel.display_results(results)
-        self._update_status("Backtest complete")
+
+        # Check if it's walk-forward results (has n_folds attribute)
+        if hasattr(results, 'n_folds'):
+            self.backtest_panel.display_walk_forward_results(results)
+            self._update_status(f"Walk-forward backtest complete ({results.n_folds} folds)")
+        else:
+            self.backtest_panel.display_results(results)
+            self._update_status("Backtest complete")
 
     def _on_backtest_error(self, error: str):
         """Handle backtest error"""
         self.backtest_panel.set_running(False)
         self._update_status(f"Backtest error: {error}")
         QMessageBox.warning(self, "Backtest Error", error)
+
+    def _on_signal_scan_requested(self, config: Dict):
+        """Handle signal scan request"""
+        if not self.market_data:
+            self.signal_scanner_panel.log("ERROR: No market data loaded. Please wait for data to load.")
+            return
+
+        self._update_status("Starting signal scan...")
+        self.signal_scanner_panel.set_scanning(True)
+        self.signal_scanner_panel.log(f"Scanning with config: {config}")
+
+        worker = SignalScannerWorker(config, self.api_client, self.market_data)
+        worker.progress.connect(self._on_signal_scan_progress)
+        worker.result.connect(self._on_signal_scan_complete)
+        worker.error.connect(self._on_signal_scan_error)
+        worker.finished.connect(lambda: self._cleanup_worker(worker))
+
+        self._active_workers.append(worker)
+        worker.start()
+
+    def _on_signal_scan_progress(self, current: int, total: int, message: str):
+        """Handle signal scan progress"""
+        self.signal_scanner_panel.update_progress(current, total, message)
+
+    def _on_signal_scan_complete(self, results: List[Dict]):
+        """Handle signal scan completion"""
+        self.signal_scanner_panel.set_scanning(False)
+        self.signal_scanner_panel.display_results(results)
+        self._update_status(f"Signal scan complete: {len(results)} signals found")
+
+    def _on_signal_scan_error(self, error: str):
+        """Handle signal scan error"""
+        self.signal_scanner_panel.set_scanning(False)
+        self.signal_scanner_panel.log(f"ERROR: {error}")
+        self._update_status(f"Scan error: {error}")
+
+    def _on_scanner_symbol_selected(self, symbol_data: Dict):
+        """Handle symbol selection from signal scanner - show chart"""
+        self._on_chart_click(symbol_data)
 
     def _cleanup_worker(self, worker):
         """Clean up finished worker"""

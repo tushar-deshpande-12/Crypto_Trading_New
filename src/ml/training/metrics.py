@@ -141,6 +141,318 @@ def direction_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
         return float('nan')
 
 
+def information_coefficient(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """
+    Calculate Information Coefficient (IC) using Spearman rank correlation.
+
+    IC measures the correlation between predicted and actual returns,
+    indicating predictive skill. Higher IC = better predictions.
+
+    Interpretation:
+        - IC > 0.05: Meaningful predictive power
+        - IC > 0.10: Strong predictive power
+        - IC > 0.15: Excellent predictive power (rare)
+        - IC < 0: Predictions inversely correlated (very bad)
+
+    Args:
+        y_true: True returns (or prices)
+        y_pred: Predicted returns (or prices)
+
+    Returns:
+        Information Coefficient (Spearman correlation), range [-1, 1]
+    """
+    print(f"[METRICS] Calculating Information Coefficient (IC)...")
+
+    try:
+        from scipy import stats
+
+        # Convert to numpy arrays and flatten
+        y_true = np.asarray(y_true).flatten()
+        y_pred = np.asarray(y_pred).flatten()
+
+        # Remove NaN values
+        mask = ~(np.isnan(y_true) | np.isnan(y_pred))
+        y_true_clean = y_true[mask]
+        y_pred_clean = y_pred[mask]
+
+        if len(y_true_clean) < 3:
+            print(f"[METRICS] [!] Warning: Not enough valid samples for IC calculation")
+            return 0.0
+
+        # Spearman rank correlation
+        ic, p_value = stats.spearmanr(y_true_clean, y_pred_clean)
+
+        print(f"[METRICS] [OK] IC: {ic:.4f} (p-value: {p_value:.4f})")
+
+        # Interpret the result
+        if ic > 0.10:
+            print(f"[METRICS]   -> Strong predictive power")
+        elif ic > 0.05:
+            print(f"[METRICS]   -> Meaningful predictive power")
+        elif ic > 0:
+            print(f"[METRICS]   -> Weak predictive power")
+        else:
+            print(f"[METRICS]   -> No predictive power (or inverse)")
+
+        return float(ic) if not np.isnan(ic) else 0.0
+
+    except ImportError:
+        print(f"[METRICS] [!] scipy not available, using numpy correlation")
+        # Fallback to Pearson correlation using numpy
+        try:
+            corr_matrix = np.corrcoef(y_true.flatten(), y_pred.flatten())
+            ic = corr_matrix[0, 1]
+            print(f"[METRICS] [OK] IC (Pearson fallback): {ic:.4f}")
+            return float(ic) if not np.isnan(ic) else 0.0
+        except Exception as e:
+            print(f"[METRICS] [X] IC calculation failed: {e}")
+            return 0.0
+    except Exception as e:
+        print(f"[METRICS] [X] IC calculation failed: {e}")
+        return 0.0
+
+
+def sharpe_ratio(
+    returns: np.ndarray,
+    risk_free_rate: float = 0.0,
+    periods_per_year: int = 8760,  # Hourly data: 24 * 365
+    annualize: bool = True
+) -> float:
+    """
+    Calculate Sharpe Ratio - risk-adjusted return metric.
+
+    Sharpe Ratio = (Mean Return - Risk Free Rate) / Std Dev of Returns
+
+    Interpretation:
+        - Sharpe < 0: Negative risk-adjusted returns
+        - Sharpe 0-1: Suboptimal risk-adjusted returns
+        - Sharpe 1-2: Good risk-adjusted returns
+        - Sharpe 2-3: Very good risk-adjusted returns
+        - Sharpe > 3: Excellent (may indicate overfitting)
+
+    Args:
+        returns: Array of period returns (e.g., hourly returns)
+        risk_free_rate: Annual risk-free rate (default 0)
+        periods_per_year: Number of periods in a year (8760 for hourly)
+        annualize: Whether to annualize the Sharpe ratio
+
+    Returns:
+        Sharpe Ratio (annualized if annualize=True)
+    """
+    print(f"[METRICS] Calculating Sharpe Ratio...")
+
+    try:
+        returns = np.asarray(returns).flatten()
+
+        # Remove NaN and infinite values
+        returns = returns[np.isfinite(returns)]
+
+        if len(returns) < 2:
+            print(f"[METRICS] [!] Warning: Not enough returns for Sharpe calculation")
+            return 0.0
+
+        # Calculate mean and std of returns
+        mean_return = np.mean(returns)
+        std_return = np.std(returns, ddof=1)  # Sample std
+
+        if std_return < 1e-10:
+            print(f"[METRICS] [!] Warning: Zero volatility, cannot calculate Sharpe")
+            return 0.0
+
+        # Convert annual risk-free rate to period rate
+        period_rf = risk_free_rate / periods_per_year
+
+        # Calculate Sharpe
+        sharpe = (mean_return - period_rf) / std_return
+
+        # Annualize if requested
+        if annualize:
+            sharpe = sharpe * np.sqrt(periods_per_year)
+
+        print(f"[METRICS] [OK] Sharpe Ratio: {sharpe:.4f}")
+        print(f"[METRICS]   - Mean return: {mean_return:.6f}")
+        print(f"[METRICS]   - Std return: {std_return:.6f}")
+        print(f"[METRICS]   - Periods: {len(returns)}")
+
+        # Interpret
+        if sharpe > 2:
+            print(f"[METRICS]   -> Very good risk-adjusted returns")
+        elif sharpe > 1:
+            print(f"[METRICS]   -> Good risk-adjusted returns")
+        elif sharpe > 0:
+            print(f"[METRICS]   -> Positive but suboptimal")
+        else:
+            print(f"[METRICS]   -> Negative risk-adjusted returns")
+
+        return float(sharpe) if not np.isnan(sharpe) else 0.0
+
+    except Exception as e:
+        print(f"[METRICS] [X] Sharpe Ratio calculation failed: {e}")
+        return 0.0
+
+
+def sortino_ratio(
+    returns: np.ndarray,
+    risk_free_rate: float = 0.0,
+    periods_per_year: int = 8760,
+    annualize: bool = True
+) -> float:
+    """
+    Calculate Sortino Ratio - downside risk-adjusted return metric.
+
+    Unlike Sharpe, Sortino only penalizes downside volatility,
+    making it more appropriate for asymmetric return distributions.
+
+    Sortino Ratio = (Mean Return - Risk Free Rate) / Downside Deviation
+
+    Args:
+        returns: Array of period returns
+        risk_free_rate: Annual risk-free rate (default 0)
+        periods_per_year: Number of periods in a year
+        annualize: Whether to annualize the ratio
+
+    Returns:
+        Sortino Ratio
+    """
+    print(f"[METRICS] Calculating Sortino Ratio...")
+
+    try:
+        returns = np.asarray(returns).flatten()
+        returns = returns[np.isfinite(returns)]
+
+        if len(returns) < 2:
+            print(f"[METRICS] [!] Warning: Not enough returns for Sortino calculation")
+            return 0.0
+
+        mean_return = np.mean(returns)
+        period_rf = risk_free_rate / periods_per_year
+
+        # Calculate downside deviation (only negative returns)
+        downside_returns = returns[returns < period_rf] - period_rf
+
+        if len(downside_returns) == 0:
+            print(f"[METRICS] [!] No downside returns, Sortino undefined")
+            return float('inf') if mean_return > period_rf else 0.0
+
+        downside_std = np.sqrt(np.mean(downside_returns ** 2))
+
+        if downside_std < 1e-10:
+            print(f"[METRICS] [!] Warning: Zero downside volatility")
+            return 0.0
+
+        sortino = (mean_return - period_rf) / downside_std
+
+        if annualize:
+            sortino = sortino * np.sqrt(periods_per_year)
+
+        print(f"[METRICS] [OK] Sortino Ratio: {sortino:.4f}")
+        print(f"[METRICS]   - Downside std: {downside_std:.6f}")
+
+        return float(sortino) if not np.isnan(sortino) else 0.0
+
+    except Exception as e:
+        print(f"[METRICS] [X] Sortino Ratio calculation failed: {e}")
+        return 0.0
+
+
+def max_drawdown(equity_curve: np.ndarray) -> Tuple[float, int, int]:
+    """
+    Calculate Maximum Drawdown from equity curve.
+
+    Maximum Drawdown = largest peak-to-trough decline in portfolio value.
+
+    Args:
+        equity_curve: Array of portfolio values over time
+
+    Returns:
+        Tuple of (max_drawdown_pct, peak_idx, trough_idx)
+    """
+    print(f"[METRICS] Calculating Maximum Drawdown...")
+
+    try:
+        equity_curve = np.asarray(equity_curve).flatten()
+
+        if len(equity_curve) < 2:
+            return 0.0, 0, 0
+
+        # Calculate running maximum
+        running_max = np.maximum.accumulate(equity_curve)
+
+        # Calculate drawdown at each point
+        drawdown = (running_max - equity_curve) / running_max
+
+        # Find maximum drawdown
+        max_dd = np.max(drawdown)
+        max_dd_idx = np.argmax(drawdown)
+
+        # Find the peak before the max drawdown
+        peak_idx = np.argmax(equity_curve[:max_dd_idx + 1])
+
+        print(f"[METRICS] [OK] Max Drawdown: {max_dd * 100:.2f}%")
+        print(f"[METRICS]   - Peak at index {peak_idx}: ${equity_curve[peak_idx]:.2f}")
+        print(f"[METRICS]   - Trough at index {max_dd_idx}: ${equity_curve[max_dd_idx]:.2f}")
+
+        return float(max_dd), int(peak_idx), int(max_dd_idx)
+
+    except Exception as e:
+        print(f"[METRICS] [X] Max Drawdown calculation failed: {e}")
+        return 0.0, 0, 0
+
+
+def calmar_ratio(
+    returns: np.ndarray,
+    equity_curve: np.ndarray,
+    periods_per_year: int = 8760
+) -> float:
+    """
+    Calculate Calmar Ratio - return over maximum drawdown.
+
+    Calmar Ratio = Annualized Return / Maximum Drawdown
+
+    Args:
+        returns: Array of period returns
+        equity_curve: Array of portfolio values
+        periods_per_year: Number of periods per year
+
+    Returns:
+        Calmar Ratio
+    """
+    print(f"[METRICS] Calculating Calmar Ratio...")
+
+    try:
+        returns = np.asarray(returns).flatten()
+        returns = returns[np.isfinite(returns)]
+
+        # Annualized return
+        total_return = np.prod(1 + returns) - 1
+        n_periods = len(returns)
+        years = n_periods / periods_per_year
+
+        if years < 0.01:  # Less than ~4 days
+            annualized_return = total_return
+        else:
+            annualized_return = (1 + total_return) ** (1 / years) - 1
+
+        # Maximum drawdown
+        max_dd, _, _ = max_drawdown(equity_curve)
+
+        if max_dd < 1e-10:
+            print(f"[METRICS] [!] Warning: Zero drawdown, Calmar undefined")
+            return 0.0
+
+        calmar = annualized_return / max_dd
+
+        print(f"[METRICS] [OK] Calmar Ratio: {calmar:.4f}")
+        print(f"[METRICS]   - Annualized return: {annualized_return * 100:.2f}%")
+        print(f"[METRICS]   - Max drawdown: {max_dd * 100:.2f}%")
+
+        return float(calmar) if not np.isnan(calmar) else 0.0
+
+    except Exception as e:
+        print(f"[METRICS] [X] Calmar Ratio calculation failed: {e}")
+        return 0.0
+
+
 def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray, verbose: bool = True) -> Dict[str, float]:
     """
     Calculate all metrics at once
@@ -165,12 +477,75 @@ def calculate_all_metrics(y_true: np.ndarray, y_pred: np.ndarray, verbose: bool 
         'mape': mean_absolute_percentage_error(y_true, y_pred),
         'r2': r2_score(y_true, y_pred),
         'direction_accuracy': direction_accuracy(y_true, y_pred),
+        'ic': information_coefficient(y_true, y_pred),
     }
 
     if verbose:
         print(f"\n[METRICS] [OK] All metrics calculated:")
         for key, value in metrics.items():
             print(f"[METRICS]   - {key.upper()}: {value:.4f}")
+
+    return metrics
+
+
+def calculate_trading_metrics(
+    equity_curve: np.ndarray,
+    returns: Optional[np.ndarray] = None,
+    risk_free_rate: float = 0.0,
+    periods_per_year: int = 8760,
+    verbose: bool = True
+) -> Dict[str, float]:
+    """
+    Calculate comprehensive trading/portfolio metrics.
+
+    Args:
+        equity_curve: Array of portfolio values over time
+        returns: Optional array of period returns (calculated from equity if None)
+        risk_free_rate: Annual risk-free rate
+        periods_per_year: Number of trading periods per year
+        verbose: Print detailed output
+
+    Returns:
+        Dictionary with all trading metrics
+    """
+    if verbose:
+        print(f"\n[METRICS] Calculating trading metrics...")
+
+    equity_curve = np.asarray(equity_curve).flatten()
+
+    # Calculate returns from equity curve if not provided
+    if returns is None:
+        returns = np.diff(equity_curve) / equity_curve[:-1]
+        returns = returns[np.isfinite(returns)]
+
+    # Calculate all metrics
+    metrics = {}
+
+    # Risk-adjusted returns
+    metrics['sharpe_ratio'] = sharpe_ratio(returns, risk_free_rate, periods_per_year)
+    metrics['sortino_ratio'] = sortino_ratio(returns, risk_free_rate, periods_per_year)
+
+    # Drawdown
+    max_dd, peak_idx, trough_idx = max_drawdown(equity_curve)
+    metrics['max_drawdown'] = max_dd
+    metrics['max_drawdown_pct'] = max_dd * 100
+
+    # Calmar ratio
+    metrics['calmar_ratio'] = calmar_ratio(returns, equity_curve, periods_per_year)
+
+    # Basic statistics
+    metrics['total_return'] = (equity_curve[-1] / equity_curve[0]) - 1
+    metrics['total_return_pct'] = metrics['total_return'] * 100
+    metrics['volatility'] = np.std(returns, ddof=1) * np.sqrt(periods_per_year)
+
+    if verbose:
+        print(f"\n[METRICS] [OK] Trading metrics calculated:")
+        print(f"[METRICS]   - Sharpe Ratio: {metrics['sharpe_ratio']:.4f}")
+        print(f"[METRICS]   - Sortino Ratio: {metrics['sortino_ratio']:.4f}")
+        print(f"[METRICS]   - Max Drawdown: {metrics['max_drawdown_pct']:.2f}%")
+        print(f"[METRICS]   - Calmar Ratio: {metrics['calmar_ratio']:.4f}")
+        print(f"[METRICS]   - Total Return: {metrics['total_return_pct']:.2f}%")
+        print(f"[METRICS]   - Volatility: {metrics['volatility'] * 100:.2f}%")
 
     return metrics
 

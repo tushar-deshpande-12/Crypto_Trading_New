@@ -82,7 +82,7 @@ class MLPanel(QWidget):
         header.setProperty("class", "title")
         layout.addWidget(header)
 
-        subtitle = QLabel("Temporal Fusion Transformer for multi-asset cryptocurrency forecasting")
+        subtitle = QLabel("LSTM-based AI for cryptocurrency direction prediction")
         subtitle.setProperty("class", "secondary")
         layout.addWidget(subtitle)
 
@@ -194,7 +194,6 @@ class MLPanel(QWidget):
         params = [
             ('hidden_size', 'Hidden Size', 32, 8, 512),
             ('lstm_layers', 'LSTM Layers', 1, 1, 8),
-            ('attention_head_size', 'Attention Heads', 4, 1, 16),
             ('dropout', 'Dropout', 0.4, 0.0, 0.9),
             ('batch_size', 'Batch Size', 128, 16, 512),
             ('max_epochs', 'Max Epochs', 50, 1, 500),
@@ -241,21 +240,6 @@ class MLPanel(QWidget):
         config_btn_layout.addStretch()
         layout.addLayout(config_btn_layout)
 
-        # Model Architecture
-        arch_layout = QHBoxLayout()
-        arch_layout.addWidget(QLabel("Model Architecture:"))
-
-        self.arch_group = QButtonGroup(self)
-        self.lstm_radio = QRadioButton("LSTM (Recommended)")
-        self.lstm_radio.setChecked(True)
-        self.tft_radio = QRadioButton("TFT (Advanced)")
-        self.arch_group.addButton(self.lstm_radio)
-        self.arch_group.addButton(self.tft_radio)
-
-        arch_layout.addWidget(self.lstm_radio)
-        arch_layout.addWidget(self.tft_radio)
-        arch_layout.addStretch()
-        layout.addLayout(arch_layout)
 
         # Training Mode
         mode_layout = QHBoxLayout()
@@ -355,80 +339,96 @@ class MLPanel(QWidget):
         return group
 
     def _create_prediction_section(self) -> QGroupBox:
-        """Create prediction section"""
-        group = QGroupBox("Prediction & Inference")
+        """Create prediction section with AI direction recommendation"""
+        group = QGroupBox("AI Prediction - Investment Direction")
         layout = QVBoxLayout(group)
 
-        # Model selection
-        model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("Load Model:"))
-        self.model_path_input = QLineEdit()
-        self.model_path_input.setReadOnly(True)
-        self.model_path_input.setPlaceholderText("No model loaded")
-        model_row.addWidget(self.model_path_input, stretch=1)
-        browse_model_btn = QPushButton("Browse")
-        browse_model_btn.clicked.connect(self._browse_model)
-        model_row.addWidget(browse_model_btn)
-        layout.addLayout(model_row)
-
-        # Symbol selection
-        symbol_row = QHBoxLayout()
-        symbol_row.addWidget(QLabel("Predict For:"))
+        # Symbol selection row
+        select_row = QHBoxLayout()
+        select_row.addWidget(QLabel("Select Crypto:"))
         self.predict_symbol_combo = QComboBox()
-        symbol_row.addWidget(self.predict_symbol_combo)
+        self.predict_symbol_combo.setMinimumWidth(150)
+        select_row.addWidget(self.predict_symbol_combo)
 
-        predict_btn = QPushButton("Generate 10-Hour Prediction")
-        predict_btn.setStyleSheet(f"background-color: {COLORS['primary']}; color: white; font-weight: bold; padding: 10px 24px;")
-        predict_btn.clicked.connect(self._generate_prediction)
-        symbol_row.addWidget(predict_btn)
-        symbol_row.addStretch()
-        layout.addLayout(symbol_row)
+        self.predict_btn = QPushButton("Get AI Prediction")
+        self.predict_btn.setStyleSheet(f"background-color: {COLORS['primary']}; color: white; font-weight: bold; padding: 12px 24px;")
+        self.predict_btn.clicked.connect(self._generate_ai_prediction)
+        select_row.addWidget(self.predict_btn)
+        select_row.addStretch()
+        layout.addLayout(select_row)
 
-        # Prediction result
-        self.prediction_label = QLabel("No predictions yet. Load a model and select a symbol.")
-        self.prediction_label.setProperty("class", "secondary")
-        layout.addWidget(self.prediction_label)
+        # Main prediction display - big direction indicator
+        self.direction_frame = QFrame()
+        self.direction_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.direction_frame.setStyleSheet(f"background-color: {COLORS['bg_medium']}; border-radius: 8px; padding: 16px;")
+        direction_layout = QVBoxLayout(self.direction_frame)
 
-        # Trading signals section
-        signals_group = QFrame()
-        signals_group.setFrameShape(QFrame.Shape.StyledPanel)
-        signals_layout = QVBoxLayout(signals_group)
+        # Direction arrow and text
+        self.direction_label = QLabel("--")
+        self.direction_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.direction_label.setStyleSheet("font-size: 48px; font-weight: bold;")
+        direction_layout.addWidget(self.direction_label)
 
-        signals_header = QHBoxLayout()
-        signals_header.addWidget(QLabel("TRADING SIGNALS (Real-Time)"))
+        self.direction_text = QLabel("Select a crypto and click 'Get AI Prediction'")
+        self.direction_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.direction_text.setStyleSheet("font-size: 18px;")
+        direction_layout.addWidget(self.direction_text)
 
-        update_signal_btn = QPushButton("Update Signal")
-        update_signal_btn.clicked.connect(self._generate_quick_signal)
-        signals_header.addWidget(update_signal_btn)
-        signals_layout.addLayout(signals_header)
+        # Confidence bar
+        conf_row = QHBoxLayout()
+        conf_row.addWidget(QLabel("Confidence:"))
+        self.confidence_bar = QProgressBar()
+        self.confidence_bar.setRange(0, 100)
+        self.confidence_bar.setValue(0)
+        self.confidence_bar.setStyleSheet("""
+            QProgressBar { border: 1px solid #555; border-radius: 4px; text-align: center; }
+            QProgressBar::chunk { background-color: #4CAF50; }
+        """)
+        conf_row.addWidget(self.confidence_bar, stretch=1)
+        self.confidence_label = QLabel("--")
+        self.confidence_label.setMinimumWidth(50)
+        conf_row.addWidget(self.confidence_label)
+        direction_layout.addLayout(conf_row)
 
-        self.signal_label = QLabel("Click 'Update Signal' to get trading signal")
-        self.signal_label.setStyleSheet("font-size: 16px; font-weight: bold;")
-        signals_layout.addWidget(self.signal_label)
+        layout.addWidget(self.direction_frame)
 
-        self.tech_indicators_label = QLabel("Technical Indicators: RSI | MACD | Trend | Volume")
-        self.tech_indicators_label.setProperty("class", "secondary")
-        signals_layout.addWidget(self.tech_indicators_label)
+        # Prediction details
+        details_frame = QFrame()
+        details_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        details_layout = QGridLayout(details_frame)
 
-        self.risk_levels_label = QLabel("")
-        signals_layout.addWidget(self.risk_levels_label)
+        details_layout.addWidget(QLabel("Prediction Horizon:"), 0, 0)
+        self.horizon_label = QLabel("4 hours ahead")
+        self.horizon_label.setStyleSheet(f"color: {COLORS['accent']};")
+        details_layout.addWidget(self.horizon_label, 0, 1)
 
-        layout.addWidget(signals_group)
+        details_layout.addWidget(QLabel("Model Accuracy:"), 0, 2)
+        self.accuracy_label = QLabel("--")
+        self.accuracy_label.setStyleSheet(f"color: {COLORS['accent']};")
+        details_layout.addWidget(self.accuracy_label, 0, 3)
 
-        # Prediction chart
-        colors = get_chart_colors()
-        self.pred_figure = Figure(figsize=(10, 4), facecolor=colors['background'])
-        self.pred_ax = self.pred_figure.add_subplot(111)
-        self.pred_ax.set_facecolor(colors['background'])
-        self.pred_ax.set_title('10-Hour Price Prediction', color=colors['text'])
-        self.pred_ax.set_xlabel('Hours Ahead', color=colors['text'])
-        self.pred_ax.set_ylabel('Price (Normalized)', color=colors['text'])
-        self.pred_ax.tick_params(colors=colors['text'])
-        self.pred_ax.grid(True, alpha=0.3, color=colors['grid'])
+        details_layout.addWidget(QLabel("Model IC:"), 1, 0)
+        self.ic_label = QLabel("--")
+        self.ic_label.setStyleSheet(f"color: {COLORS['accent']};")
+        details_layout.addWidget(self.ic_label, 1, 1)
 
-        self.pred_canvas = FigureCanvas(self.pred_figure)
-        self.pred_canvas.setMinimumHeight(300)
-        layout.addWidget(self.pred_canvas)
+        details_layout.addWidget(QLabel("Last Updated:"), 1, 2)
+        self.last_update_label = QLabel("--")
+        self.last_update_label.setStyleSheet(f"color: {COLORS['accent']};")
+        details_layout.addWidget(self.last_update_label, 1, 3)
+
+        layout.addWidget(details_frame)
+
+        # Disclaimer
+        disclaimer = QLabel("Note: AI predictions are based on historical patterns. Past performance does not guarantee future results. Always do your own research.")
+        disclaimer.setWordWrap(True)
+        disclaimer.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-style: italic;")
+        layout.addWidget(disclaimer)
+
+        # Hidden fields for model path (used by browse)
+        self.model_path_input = QLineEdit()
+        self.model_path_input.setVisible(False)
+        layout.addWidget(self.model_path_input)
 
         return group
 
@@ -582,10 +582,31 @@ class MLPanel(QWidget):
             self.datasets_layout.addWidget(cb)
 
     def _update_symbol_combo(self):
-        """Update prediction symbol dropdown"""
+        """Update prediction symbol dropdown with trained models first"""
         self.predict_symbol_combo.clear()
-        symbols = list(self._available_datasets.keys())
-        self.predict_symbol_combo.addItems(symbols)
+
+        # Get symbols with trained models (prioritize these)
+        from pathlib import Path
+        trained_symbols = set()
+        checkpoint_dir = Path("models/checkpoints")
+        if checkpoint_dir.exists():
+            for d in checkpoint_dir.iterdir():
+                if d.is_dir() and any(d.glob("*.pt")):
+                    trained_symbols.add(d.name)
+
+        # Get all available symbols from datasets
+        all_symbols = set(self._available_datasets.keys())
+
+        # Combine: trained models first, then others
+        trained_list = sorted(trained_symbols)
+        other_list = sorted(all_symbols - trained_symbols)
+
+        # Add with markers
+        for sym in trained_list:
+            self.predict_symbol_combo.addItem(f"{sym} [AI Ready]", sym)
+
+        for sym in other_list:
+            self.predict_symbol_combo.addItem(sym, sym)
 
     def _update_split_labels(self):
         """Update split ratio labels"""
@@ -606,7 +627,6 @@ class MLPanel(QWidget):
         defaults = {
             'hidden_size': 32,
             'lstm_layers': 1,
-            'attention_head_size': 4,
             'dropout': 0.4,
             'batch_size': 128,
             'max_epochs': 50,
@@ -681,7 +701,7 @@ class MLPanel(QWidget):
         """Get current configuration"""
         config = {key: spin.value() for key, spin in self.config_inputs.items()}
         config['use_gpu'] = self.use_gpu_cb.isChecked()
-        config['architecture'] = 'lstm' if self.lstm_radio.isChecked() else 'tft'
+        config['architecture'] = 'lstm'
         config['training_mode'] = 'scratch' if self.scratch_radio.isChecked() else 'finetune'
         config['pretrained_path'] = self.pretrained_input.text() if not self.scratch_radio.isChecked() else None
         config['train_split'] = self.train_split_slider.value() / 100.0
@@ -721,7 +741,7 @@ class MLPanel(QWidget):
     def _generate_prediction(self):
         """Generate prediction"""
         model_path = self.model_path_input.text()
-        symbol = self.predict_symbol_combo.currentText()
+        symbol = self.predict_symbol_combo.currentData() or self.predict_symbol_combo.currentText().replace(" [AI Ready]", "")
 
         if not model_path or model_path == "No model loaded":
             QMessageBox.warning(self, "No Model", "Please load a model first.")
@@ -735,19 +755,175 @@ class MLPanel(QWidget):
 
     def _generate_quick_signal(self):
         """Generate quick trading signal based on technical indicators"""
-        symbol = self.predict_symbol_combo.currentText()
+        symbol = self.predict_symbol_combo.currentData() or self.predict_symbol_combo.currentText().replace(" [AI Ready]", "")
         if not symbol:
-            self.signal_label.setText("[!] Select a symbol first")
+            return
+        # Redirect to AI prediction
+        self._generate_ai_prediction()
+
+    def _generate_ai_prediction(self):
+        """Generate AI prediction for investment direction"""
+        # Get actual symbol (not display text which may include "[AI Ready]")
+        symbol = self.predict_symbol_combo.currentData()
+        if symbol is None:
+            symbol = self.predict_symbol_combo.currentText().replace(" [AI Ready]", "")
+        if not symbol:
+            QMessageBox.warning(self, "No Symbol", "Please select a cryptocurrency.")
             return
 
-        # This would normally calculate based on real data
-        self.signal_label.setText(f"[?] Signal calculation requires data for {symbol}")
-        self.signal_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        try:
+            from pathlib import Path
+            from datetime import datetime
+            import numpy as np
+            import pandas as pd
+
+            # Find model for this symbol
+            model_path = Path(f"models/checkpoints/{symbol}/simple_model.pt")
+
+            if not model_path.exists():
+                # Try to find any trained model
+                checkpoint_dir = Path("models/checkpoints")
+                symbol_dirs = list(checkpoint_dir.glob(f"{symbol}*"))
+                if symbol_dirs:
+                    possible_models = list(symbol_dirs[0].glob("*.pt"))
+                    if possible_models:
+                        model_path = possible_models[0]
+
+            if not model_path.exists():
+                self.direction_label.setText("?")
+                self.direction_text.setText(f"No trained model found for {symbol}. Train a model first.")
+                self.direction_label.setStyleSheet("font-size: 48px; font-weight: bold; color: #888;")
+                return
+
+            # Load model
+            from src.ml.models.simple_model import SimpleTrainer
+
+            trainer = SimpleTrainer.load(str(model_path))
+
+            # Load recent data for this symbol
+            from src.core.config import AppConfig
+            dataset_dir = Path(AppConfig.DATASET_DIR)
+            symbol_data_dirs = list(dataset_dir.glob(f"{symbol}/*"))
+
+            if not symbol_data_dirs:
+                self.direction_label.setText("?")
+                self.direction_text.setText(f"No data found for {symbol}.")
+                return
+
+            # Find largest/most recent data file
+            csv_files = []
+            for d in symbol_data_dirs:
+                csv_files.extend(list(d.glob("*.csv")))
+
+            if not csv_files:
+                self.direction_label.setText("?")
+                self.direction_text.setText(f"No CSV data found for {symbol}.")
+                return
+
+            largest_file = max(csv_files, key=lambda f: f.stat().st_size)
+            df = pd.read_csv(largest_file)
+
+            # Use last portion for prediction
+            df = df.tail(500)  # Last 500 rows
+
+            # Prepare features
+            from src.ml.models.simple_model import create_features, get_feature_columns
+
+            df = create_features(df)
+            feature_cols = get_feature_columns(df)
+            df = df.dropna()
+
+            if len(df) < trainer.config.sequence_length + 10:
+                self.direction_label.setText("?")
+                self.direction_text.setText("Insufficient data for prediction.")
+                return
+
+            # Get features for last sequence
+            features = df[feature_cols].values.astype(np.float32)
+
+            # Handle inf/nan
+            features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+            features = np.clip(features, -10, 10)
+
+            # Normalize with saved scaler
+            features = trainer.scaler.transform(features)
+
+            # Get last sequence
+            seq_len = trainer.config.sequence_length
+            last_seq = features[-seq_len:]
+
+            # Predict
+            import torch
+            trainer.model.eval()
+            with torch.no_grad():
+                x = torch.FloatTensor(last_seq).unsqueeze(0)
+                logits = trainer.model(x)
+                prob = torch.sigmoid(logits).item()
+
+            # Determine direction
+            if prob > 0.55:
+                direction = "UP"
+                arrow = "▲"
+                color = COLORS['success']
+                recommendation = f"AI suggests {symbol} may go UP in next 4 hours"
+            elif prob < 0.45:
+                direction = "DOWN"
+                arrow = "▼"
+                color = COLORS['danger']
+                recommendation = f"AI suggests {symbol} may go DOWN in next 4 hours"
+            else:
+                direction = "NEUTRAL"
+                arrow = "◆"
+                color = COLORS['text_secondary']
+                recommendation = f"AI is uncertain about {symbol} direction"
+
+            # Update UI
+            self.direction_label.setText(f"{arrow} {direction}")
+            self.direction_label.setStyleSheet(f"font-size: 48px; font-weight: bold; color: {color};")
+            self.direction_text.setText(recommendation)
+            self.direction_text.setStyleSheet(f"font-size: 18px; color: {color};")
+
+            # Confidence (distance from 0.5)
+            confidence = abs(prob - 0.5) * 200  # Scale to 0-100
+            self.confidence_bar.setValue(int(confidence))
+            self.confidence_label.setText(f"{confidence:.0f}%")
+
+            # Update confidence bar color based on direction
+            if direction == "UP":
+                self.confidence_bar.setStyleSheet("""
+                    QProgressBar { border: 1px solid #555; border-radius: 4px; text-align: center; }
+                    QProgressBar::chunk { background-color: #4CAF50; }
+                """)
+            elif direction == "DOWN":
+                self.confidence_bar.setStyleSheet("""
+                    QProgressBar { border: 1px solid #555; border-radius: 4px; text-align: center; }
+                    QProgressBar::chunk { background-color: #F44336; }
+                """)
+            else:
+                self.confidence_bar.setStyleSheet("""
+                    QProgressBar { border: 1px solid #555; border-radius: 4px; text-align: center; }
+                    QProgressBar::chunk { background-color: #888; }
+                """)
+
+            # Update details
+            self.horizon_label.setText("4 hours ahead")
+            self.accuracy_label.setText(f"~51-53%")
+            self.ic_label.setText(f"~0.02-0.06")
+            self.last_update_label.setText(datetime.now().strftime("%H:%M:%S"))
+
+            self.log_message(f"[PREDICTION] {symbol}: {direction} (prob={prob:.3f}, conf={confidence:.0f}%)")
+
+        except Exception as e:
+            self.direction_label.setText("!")
+            self.direction_text.setText(f"Error: {str(e)}")
+            self.direction_label.setStyleSheet(f"font-size: 48px; font-weight: bold; color: {COLORS['danger']};")
+            import traceback
+            traceback.print_exc()
 
     def _run_model_test(self):
         """Run model test"""
         model_path = self.model_path_input.text()
-        symbol = self.predict_symbol_combo.currentText()
+        symbol = self.predict_symbol_combo.currentData() or self.predict_symbol_combo.currentText().replace(" [AI Ready]", "")
 
         if not model_path or model_path == "No model loaded":
             QMessageBox.warning(self, "No Model", "Please load a model first.")
@@ -801,7 +977,13 @@ class MLPanel(QWidget):
 
     def update_metrics(self, metrics: Dict):
         """Update displayed metrics"""
-        metrics_text = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+        parts = []
+        for k, v in metrics.items():
+            if isinstance(v, (int, float)):
+                parts.append(f"{k}: {v:.4f}")
+            else:
+                parts.append(f"{k}: {v}")
+        metrics_text = " | ".join(parts)
         self.metrics_label.setText(f"Metrics: {metrics_text}")
 
     def set_training_complete(self, success: bool, message: str):

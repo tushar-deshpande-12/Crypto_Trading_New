@@ -7,7 +7,8 @@ Provides UI for selecting and backtesting trading strategies with results visual
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QProgressBar, QGroupBox, QLineEdit, QDoubleSpinBox,
-    QTextEdit, QSplitter, QFrame, QGridLayout, QCheckBox
+    QTextEdit, QSplitter, QFrame, QGridLayout, QCheckBox, QFileDialog,
+    QSpinBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -34,13 +35,27 @@ class BacktestPanel(QWidget):
 
     # Available strategies
     STRATEGIES = [
+        # Basic strategies
         ('rsi', 'RSI Oversold/Overbought'),
         ('macd', 'MACD Crossover'),
         ('bollinger', 'Bollinger Bands'),
         ('ma_crossover', 'MA Crossover'),
         ('stochastic', 'Stochastic'),
+        # Combo strategies (famous combinations)
+        ('rsi_macd', 'RSI + MACD Combo'),
+        ('bb_rsi', 'Bollinger + RSI Combo'),
+        ('macd_ma', 'MACD + MA Combo'),
+        ('stoch_rsi', 'Stochastic + RSI Combo'),
+        ('triple_ema', 'Triple EMA Crossover'),
+        ('adx_macd', 'ADX + MACD Trend'),
+        # Multi-strategy
         ('ensemble', 'Ensemble (Multi-Strategy)'),
-        ('prediction', 'AI Model Prediction'),
+        # AI-based
+        ('prediction', 'AI Model Prediction (LSTM)'),
+        ('walk_forward', 'Walk-Forward AI Backtest'),
+        # Prophet-based
+        ('prophet', 'Prophet Forecast Backtest'),
+        ('prophet_walk_forward', 'Walk-Forward Prophet Backtest'),
     ]
 
     def __init__(self, parent=None):
@@ -121,6 +136,7 @@ class BacktestPanel(QWidget):
         self.model_path_row.addWidget(self.model_path_input, stretch=1)
         self.browse_btn = QPushButton("Browse")
         self.browse_btn.setFixedWidth(60)
+        self.browse_btn.clicked.connect(self._browse_model)
         self.model_path_row.addWidget(self.browse_btn)
         symbol_layout.addLayout(self.model_path_row)
 
@@ -157,6 +173,45 @@ class BacktestPanel(QWidget):
         params_layout.addWidget(self.confidence_spin, 2, 1)
 
         layout.addWidget(params_group)
+
+        # Walk-Forward Parameters (hidden by default)
+        self.wf_params_group = QGroupBox("Walk-Forward Parameters")
+        wf_layout = QGridLayout(self.wf_params_group)
+
+        # Number of folds
+        wf_layout.addWidget(QLabel("Number of Folds:"), 0, 0)
+        self.wf_folds_spin = QSpinBox()
+        self.wf_folds_spin.setRange(3, 20)
+        self.wf_folds_spin.setValue(5)
+        self.wf_folds_spin.setToolTip("Number of train/test splits for walk-forward analysis")
+        wf_layout.addWidget(self.wf_folds_spin, 0, 1)
+
+        # Train ratio
+        wf_layout.addWidget(QLabel("Train Ratio:"), 1, 0)
+        self.wf_train_ratio_spin = QDoubleSpinBox()
+        self.wf_train_ratio_spin.setRange(0.5, 0.9)
+        self.wf_train_ratio_spin.setValue(0.7)
+        self.wf_train_ratio_spin.setSingleStep(0.05)
+        self.wf_train_ratio_spin.setDecimals(2)
+        self.wf_train_ratio_spin.setToolTip("Fraction of each fold used for training")
+        wf_layout.addWidget(self.wf_train_ratio_spin, 1, 1)
+
+        # Gap periods
+        wf_layout.addWidget(QLabel("Gap Periods:"), 2, 0)
+        self.wf_gap_spin = QSpinBox()
+        self.wf_gap_spin.setRange(0, 48)
+        self.wf_gap_spin.setValue(4)
+        self.wf_gap_spin.setToolTip("Hours gap between train and test to prevent lookahead")
+        wf_layout.addWidget(self.wf_gap_spin, 2, 1)
+
+        # Retrain on each fold
+        self.wf_retrain_cb = QCheckBox("Retrain on each fold")
+        self.wf_retrain_cb.setChecked(True)
+        self.wf_retrain_cb.setToolTip("Retrain model on each fold's training data")
+        wf_layout.addWidget(self.wf_retrain_cb, 3, 0, 1, 2)
+
+        self.wf_params_group.setVisible(False)
+        layout.addWidget(self.wf_params_group)
 
         # Show signals on chart option
         self.show_signals_cb = QCheckBox("Show signals on chart")
@@ -240,25 +295,62 @@ class BacktestPanel(QWidget):
 
         # Update description
         descriptions = {
+            # Basic strategies
             'rsi': 'Buy when RSI < 30 (oversold), Sell when RSI > 70 (overbought)',
             'macd': 'Buy when MACD crosses above signal line, Sell on cross below',
             'bollinger': 'Buy at lower Bollinger Band, Sell at upper band',
             'ma_crossover': 'Buy on Golden Cross (SMA10 > SMA20), Sell on Death Cross',
             'stochastic': 'Buy when %K crosses %D in oversold zone, Sell in overbought',
+            # Combo strategies
+            'rsi_macd': 'RSI oversold/overbought + MACD crossover confirmation',
+            'bb_rsi': 'Bollinger Band position + RSI momentum for mean reversion',
+            'macd_ma': 'MACD crossover + MA trend direction confirmation',
+            'stoch_rsi': 'Double momentum filter using Stochastic and RSI',
+            'triple_ema': 'Classic trend following with 3 EMA alignment (5/13/50)',
+            'adx_macd': 'Only trade MACD signals when ADX shows strong trend (>25)',
+            # Multi-strategy
             'ensemble': 'Combines multiple strategies with weighted voting',
-            'prediction': 'Uses AI model predictions for trading signals',
+            # AI-based
+            'prediction': 'Uses LSTM model predictions for trading signals',
+            'walk_forward': 'Rolling train/test splits with LSTM model retraining for realistic performance',
+            # Prophet-based
+            'prophet': 'Uses Prophet time series forecasts for trading signals (2.5% min profit)',
+            'prophet_walk_forward': 'Walk-forward Prophet forecasting with periodic retraining',
         }
         self.strategy_desc.setText(descriptions.get(key, ''))
 
-        # Show/hide model path for prediction strategy
-        is_prediction = (key == 'prediction')
-        self.model_path_input.setVisible(is_prediction)
-        self.browse_btn.setVisible(is_prediction)
+        # Show/hide model path for LSTM prediction or walk_forward strategy
+        is_lstm_strategy = (key in ('prediction', 'walk_forward'))
+        self.model_path_input.setVisible(is_lstm_strategy)
+        self.browse_btn.setVisible(is_lstm_strategy)
         # Hide the label too by iterating layout
         for i in range(self.model_path_row.count()):
             item = self.model_path_row.itemAt(i)
             if item and item.widget():
-                item.widget().setVisible(is_prediction)
+                item.widget().setVisible(is_lstm_strategy)
+
+        # Show/hide walk-forward parameters
+        is_walk_forward = (key in ('walk_forward', 'prophet_walk_forward'))
+        self.wf_params_group.setVisible(is_walk_forward)
+
+    def _browse_model(self):
+        """Browse for AI model file"""
+        from pathlib import Path
+
+        # Start in models/checkpoints if it exists
+        start_dir = "models/checkpoints"
+        if not Path(start_dir).exists():
+            start_dir = "."
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select AI Model",
+            start_dir,
+            "Model Files (*.pt *.pth *.ckpt);;All Files (*.*)"
+        )
+
+        if file_path:
+            self.model_path_input.setText(file_path)
 
     def _on_run_click(self):
         """Handle run button click"""
@@ -278,6 +370,13 @@ class BacktestPanel(QWidget):
         if config['strategy'] == 'prediction':
             config['mode'] = 'model'
             config['model_path'] = self.model_path_input.text()
+        elif config['strategy'] == 'walk_forward':
+            config['mode'] = 'walk_forward'
+            config['model_path'] = self.model_path_input.text()
+            config['n_folds'] = self.wf_folds_spin.value()
+            config['train_ratio'] = self.wf_train_ratio_spin.value()
+            config['gap_periods'] = self.wf_gap_spin.value()
+            config['retrain'] = self.wf_retrain_cb.isChecked()
 
         self.backtest_requested.emit(config)
 
@@ -381,3 +480,110 @@ class BacktestPanel(QWidget):
         self.canvas.draw()
         self.progress_bar.setValue(0)
         self.status_label.setText("Ready")
+
+    def display_walk_forward_results(self, results):
+        """
+        Display walk-forward backtest results.
+
+        Args:
+            results: WalkForwardResults object with aggregated metrics
+        """
+        # Update metrics with walk-forward specific values
+        self.metric_labels['initial'].setText(f"${results.initial_capital:,.2f}")
+        self.metric_labels['final'].setText(f"${results.final_capital:,.2f}")
+
+        # Total return
+        total_return = results.final_capital - results.initial_capital
+        total_return_pct = (total_return / results.initial_capital) * 100
+        ret_color = COLORS['chart_green'] if total_return >= 0 else COLORS['chart_red']
+        self.metric_labels['return'].setText(
+            f"<span style='color:{ret_color}'>${total_return:+,.2f}</span>"
+        )
+        self.metric_labels['return_pct'].setText(
+            f"<span style='color:{ret_color}'>{total_return_pct:+.2f}%</span>"
+        )
+
+        # Walk-forward specific metrics
+        self.metric_labels['trades'].setText(f"{results.n_folds} folds")
+
+        # Win rate as avg accuracy
+        acc_pct = results.avg_accuracy * 100
+        self.metric_labels['win_rate'].setText(f"{acc_pct:.1f}% acc")
+
+        # P/L ratio as avg Sharpe
+        sharpe_color = COLORS['chart_green'] if results.avg_sharpe >= 0 else COLORS['chart_red']
+        self.metric_labels['pl_ratio'].setText(
+            f"<span style='color:{sharpe_color}'>{results.avg_sharpe:.2f} Sharpe</span>"
+        )
+
+        # Buy & Hold as avg IC
+        ic_color = COLORS['chart_green'] if results.avg_ic >= 0 else COLORS['chart_red']
+        self.metric_labels['buy_hold'].setText(
+            f"<span style='color:{ic_color}'>{results.avg_ic:.4f} IC</span>"
+        )
+
+        # Excess return as stability
+        self.metric_labels['excess'].setText(results.stability)
+
+        # Direction accuracy
+        self.metric_labels['dir_acc'].setText(f"{results.avg_accuracy*100:.1f}%")
+
+        # Draw walk-forward equity curve
+        self._draw_walk_forward_chart(results)
+
+        self.status_label.setText(f"Walk-forward backtest complete ({results.n_folds} folds)")
+
+    def _draw_walk_forward_chart(self, results):
+        """Draw walk-forward results chart with fold performance"""
+        self.figure.clear()
+        colors = get_chart_colors()
+
+        # Create 2 subplots: equity curve and per-fold metrics
+        ax1 = self.figure.add_subplot(211)
+        ax2 = self.figure.add_subplot(212)
+
+        for ax in [ax1, ax2]:
+            ax.set_facecolor(colors['background'])
+            ax.tick_params(colors=colors['text'])
+
+        # Top: Cumulative equity curve
+        if hasattr(results, 'equity_curve') and results.equity_curve is not None:
+            equity = results.equity_curve
+            ax1.plot(equity.index, equity.values, color=colors['primary'], linewidth=2)
+            ax1.axhline(results.initial_capital, color=colors['text'], linestyle='--', alpha=0.5)
+        else:
+            # Fallback: show fold returns as cumulative
+            fold_returns = [f.get('total_return_pct', 0) for f in results.fold_results]
+            cumulative = [100]
+            for ret in fold_returns:
+                cumulative.append(cumulative[-1] * (1 + ret/100))
+            ax1.plot(range(len(cumulative)), cumulative, color=colors['primary'],
+                    linewidth=2, marker='o')
+            ax1.axhline(100, color=colors['text'], linestyle='--', alpha=0.5)
+
+        ax1.set_title('Walk-Forward Equity', color=colors['text'], fontsize=10)
+        ax1.set_ylabel('Portfolio Value', color=colors['text'])
+        ax1.grid(True, alpha=0.3, color=colors['grid'])
+
+        # Bottom: Per-fold Sharpe ratios
+        fold_sharpes = [f.get('sharpe', 0) for f in results.fold_results]
+        fold_ics = [f.get('ic', 0) for f in results.fold_results]
+        x = range(1, len(fold_sharpes) + 1)
+
+        bar_width = 0.35
+        bars1 = ax2.bar([i - bar_width/2 for i in x], fold_sharpes, bar_width,
+                       label='Sharpe', color=colors['primary'], alpha=0.8)
+        bars2 = ax2.bar([i + bar_width/2 for i in x], [ic * 10 for ic in fold_ics], bar_width,
+                       label='IC (x10)', color=colors.get('secondary', '#ff9800'), alpha=0.8)
+
+        ax2.axhline(0, color=colors['text'], linestyle='-', alpha=0.3)
+        ax2.set_title('Per-Fold Performance', color=colors['text'], fontsize=10)
+        ax2.set_xlabel('Fold', color=colors['text'])
+        ax2.set_ylabel('Sharpe / IC*10', color=colors['text'])
+        ax2.set_xticks(list(x))
+        ax2.legend(facecolor=colors['background'], edgecolor=colors['grid'],
+                  labelcolor=colors['text'], fontsize=8)
+        ax2.grid(True, alpha=0.3, color=colors['grid'])
+
+        self.figure.tight_layout()
+        self.canvas.draw()

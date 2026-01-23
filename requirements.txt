@@ -16,3 +16,8 @@ pyyaml>=6.0
 
 # GUI dependencies (PyQt6)
 PyQt6>=6.4.0
+PyQt6-WebEngine>=6.4.0
+
+# Exchange & charting
+ccxt>=4.0.0
+plotly>=5.18.0

@@ -77,6 +77,7 @@ class ChartPanel(QWidget):
         'bollinger': 'Bollinger Bands',
         'ma_crossover': 'MA Crossover',
         'stochastic': 'Stochastic',
+        'ensemble': 'Ensemble (Multi-Strategy)',
     }
 
     def __init__(self, parent=None):
@@ -225,6 +226,35 @@ class ChartPanel(QWidget):
     def _on_strategy_changed(self, index: int):
         """Handle strategy selection change"""
         self._selected_strategy = self.strategy_combo.currentData()
+
+        # Auto-enable relevant indicators for each strategy
+        strategy_indicators = {
+            'rsi': {'subplots': ['rsi']},
+            'macd': {'subplots': ['macd']},
+            'bollinger': {'overlays': ['bollinger']},
+            'ma_crossover': {'overlays': ['sma_10', 'sma_20']},
+            'stochastic': {'subplots': ['stochastic']},
+            'ensemble': {
+                'overlays': ['bollinger', 'sma_10', 'sma_20'],
+                'subplots': ['rsi', 'macd', 'stochastic']
+            },
+        }
+
+        if self._selected_strategy in strategy_indicators:
+            indicators = strategy_indicators[self._selected_strategy]
+
+            # Auto-check overlay checkboxes
+            for key in indicators.get('overlays', []):
+                if key in self.overlay_checkboxes:
+                    self.overlay_checkboxes[key].setChecked(True)
+                    self._selected_overlays.add(key)
+
+            # Auto-check subplot checkboxes
+            for key in indicators.get('subplots', []):
+                if key in self.subplot_checkboxes:
+                    self.subplot_checkboxes[key].setChecked(True)
+                    self._selected_subplots.add(key)
+
         self._generate_strategy_signals()
         self._redraw_chart()
 
@@ -265,10 +295,37 @@ class ChartPanel(QWidget):
             buy_count = sum(1 for s in self._strategy_signals if s.action == 'BUY')
             sell_count = sum(1 for s in self._strategy_signals if s.action == 'SELL')
             timescale_label = TIMESCALES[self._selected_timescale]['label']
-            self.signal_stats_label.setText(
-                f"Signals ({timescale_label}): {len(self._strategy_signals)}\n"
-                f"BUY: {buy_count} | SELL: {sell_count}"
-            )
+
+            # For ensemble, show additional vote breakdown
+            if self._selected_strategy == 'ensemble' and self._strategy_signals:
+                # Get voting info from most recent signal
+                last_signal = self._strategy_signals[-1] if self._strategy_signals else None
+                if last_signal and last_signal.metadata:
+                    votes = last_signal.metadata.get('votes', {})
+                    strategy_signals = last_signal.metadata.get('strategy_signals', {})
+
+                    # Build vote summary
+                    vote_summary = []
+                    for strat_name, strat_data in strategy_signals.items():
+                        action = strat_data.get('action', 'HOLD')[:1]  # B/S/H
+                        conf = strat_data.get('confidence', 0) * 100
+                        vote_summary.append(f"{strat_name}:{action}")
+
+                    self.signal_stats_label.setText(
+                        f"Signals ({timescale_label}): {len(self._strategy_signals)}\n"
+                        f"BUY: {buy_count} | SELL: {sell_count}\n"
+                        f"Latest: {' | '.join(vote_summary)}"
+                    )
+                else:
+                    self.signal_stats_label.setText(
+                        f"Signals ({timescale_label}): {len(self._strategy_signals)}\n"
+                        f"BUY: {buy_count} | SELL: {sell_count}"
+                    )
+            else:
+                self.signal_stats_label.setText(
+                    f"Signals ({timescale_label}): {len(self._strategy_signals)}\n"
+                    f"BUY: {buy_count} | SELL: {sell_count}"
+                )
 
         except Exception as e:
             self.signal_stats_label.setText(f"Error: {str(e)[:50]}")

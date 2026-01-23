@@ -1,0 +1,44 @@
+{
+  "decisions": [
+    {
+      "timestamp": "2026-01-21T23:35:01.597197",
+      "symbol": "BTCUSDT",
+      "action": "HOLD",
+      "position_size": 0.0,
+      "current_price": 50000,
+      "predicted_price": 51500.0,
+      "take_profit": 51061.102581876425,
+      "stop_loss": 48376.9279794516,
+      "predicted_return": 0.03,
+      "predicted_move_pct": 2.122205163752855,
+      "raw_edge": 0.03,
+      "adjusted_edge": 0.03,
+      "volatility": 0.02,
+      "confidence": 0.8,
+      "information_coefficient": 0.08,
+      "current_sharpe": 0.0,
+      "risk_reward_ratio": 0.6537618592660476,
+      "reasoning": [
+        "Raw edge: 3.000%",
+        "Volatility-clipped edge: 3.000%",
+        "Direction: BUY (edge > 0)",
+        "Predicted move 2.12% exceeds minimum threshold",
+        "Sharpe-based size: 5.0% (Sharpe=0.00)",
+        "Confidence-adjusted: 4.0% (conf=0.80)",
+        "Final position size: 5.0%",
+        "Take profit: $51061.10",
+        "Stop loss: $48376.93",
+        "Risk/Reward: 0.65:1",
+        "Position reduced due to low R/R: 2.5%",
+        "Position size too small (2.5% < 5.0%)",
+        "Decision: HOLD - Position size below minimum"
+      ],
+      "warnings": [
+        "Risk/reward ratio below 1:1 (0.65)"
+      ],
+      "executed": false,
+      "execution_price": null,
+      "execution_time": null
+    }
+  ]
+}
