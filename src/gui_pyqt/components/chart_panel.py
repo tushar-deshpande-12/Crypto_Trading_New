@@ -77,6 +77,7 @@ class ChartPanel(QWidget):
         'bollinger': 'Bollinger Bands',
         'ma_crossover': 'MA Crossover',
         'stochastic': 'Stochastic',
+        'ensemble': 'Ensemble (Multi-Strategy)',
     }
 
     def __init__(self, parent=None):
@@ -225,6 +226,35 @@ class ChartPanel(QWidget):
     def _on_strategy_changed(self, index: int):
         """Handle strategy selection change"""
         self._selected_strategy = self.strategy_combo.currentData()
+
+        # Auto-enable relevant indicators for each strategy
+        strategy_indicators = {
+            'rsi': {'subplots': ['rsi']},
+            'macd': {'subplots': ['macd']},
+            'bollinger': {'overlays': ['bollinger']},
+            'ma_crossover': {'overlays': ['sma_10', 'sma_20']},
+            'stochastic': {'subplots': ['stochastic']},
+            'ensemble': {
+                'overlays': ['bollinger', 'sma_10', 'sma_20'],
+                'subplots': ['rsi', 'macd', 'stochastic']
+            },
+        }
+
+        if self._selected_strategy in strategy_indicators:
+            indicators = strategy_indicators[self._selected_strategy]
+
+            # Auto-check overlay checkboxes
+            for key in indicators.get('overlays', []):
+                if key in self.overlay_checkboxes:
+                    self.overlay_checkboxes[key].setChecked(True)
+                    self._selected_overlays.add(key)
+
+            # Auto-check subplot checkboxes
+            for key in indicators.get('subplots', []):
+                if key in self.subplot_checkboxes:
+                    self.subplot_checkboxes[key].setChecked(True)
+                    self._selected_subplots.add(key)
+
         self._generate_strategy_signals()
         self._redraw_chart()
 
@@ -265,10 +295,37 @@ class ChartPanel(QWidget):
             buy_count = sum(1 for s in self._strategy_signals if s.action == 'BUY')
             sell_count = sum(1 for s in self._strategy_signals if s.action == 'SELL')
             timescale_label = TIMESCALES[self._selected_timescale]['label']
-            self.signal_stats_label.setText(
-                f"Signals ({timescale_label}): {len(self._strategy_signals)}\n"
-                f"BUY: {buy_count} | SELL: {sell_count}"
-            )
+
+            # For ensemble, show additional vote breakdown
+            if self._selected_strategy == 'ensemble' and self._strategy_signals:
+                # Get voting info from most recent signal
+                last_signal = self._strategy_signals[-1] if self._strategy_signals else None
+                if last_signal and last_signal.metadata:
+                    votes = last_signal.metadata.get('votes', {})
+                    strategy_signals = last_signal.metadata.get('strategy_signals', {})
+
+                    # Build vote summary
+                    vote_summary = []
+                    for strat_name, strat_data in strategy_signals.items():
+                        action = strat_data.get('action', 'HOLD')[:1]  # B/S/H
+                        conf = strat_data.get('confidence', 0) * 100
+                        vote_summary.append(f"{strat_name}:{action}")
+
+                    self.signal_stats_label.setText(
+                        f"Signals ({timescale_label}): {len(self._strategy_signals)}\n"
+                        f"BUY: {buy_count} | SELL: {sell_count}\n"
+                        f"Latest: {' | '.join(vote_summary)}"
+                    )
+                else:
+                    self.signal_stats_label.setText(
+                        f"Signals ({timescale_label}): {len(self._strategy_signals)}\n"
+                        f"BUY: {buy_count} | SELL: {sell_count}"
+                    )
+            else:
+                self.signal_stats_label.setText(
+                    f"Signals ({timescale_label}): {len(self._strategy_signals)}\n"
+                    f"BUY: {buy_count} | SELL: {sell_count}"
+                )
 
         except Exception as e:
             self.signal_stats_label.setText(f"Error: {str(e)[:50]}")
@@ -607,7 +664,7 @@ class ChartPanel(QWidget):
                      edgecolor=colors['grid'], labelcolor=colors['text'])
 
     def _draw_candlesticks(self, ax, df: pd.DataFrame, colors: Dict):
-        """Draw candlestick chart"""
+        """Draw enhanced candlestick chart with improved visuals"""
         dates = df.index
         opens = df['open'].values
         highs = df['high'].values
@@ -621,27 +678,76 @@ class ChartPanel(QWidget):
         # Width of candles (in days for datetime index)
         if len(dates) > 1:
             diff = dates[1] - dates[0]
-            # Handle both timedelta and numeric differences
             if hasattr(diff, 'total_seconds'):
-                width = 0.6 * diff.total_seconds() / 86400
+                width = 0.7 * diff.total_seconds() / 86400
             else:
-                width = 0.6  # Numeric index, use fixed width
+                width = 0.7
         else:
             width = 0.01
 
-        # Draw wicks
+        # Enhanced colors for better visibility
+        up_color = '#26a69a'  # Teal green
+        down_color = '#ef5350'  # Coral red
+        up_wick = '#4db6ac'  # Lighter teal for wicks
+        down_wick = '#e57373'  # Lighter red for wicks
+
+        # Draw wicks with gradient effect
         for i in range(len(dates)):
-            color = colors['positive'] if up[i] else colors['negative']
-            ax.plot([dates[i], dates[i]], [lows[i], highs[i]], color=color, linewidth=1)
+            wick_color = up_wick if up[i] else down_wick
+            ax.plot([dates[i], dates[i]], [lows[i], highs[i]],
+                   color=wick_color, linewidth=1.2, solid_capstyle='round')
 
-        # Draw bodies
+        # Draw bodies with slight transparency for depth
         ax.bar(dates[up], closes[up] - opens[up], width, bottom=opens[up],
-               color=colors['positive'], edgecolor=colors['positive'])
+               color=up_color, edgecolor=up_color, alpha=0.95, linewidth=0.5)
         ax.bar(dates[down], opens[down] - closes[down], width, bottom=closes[down],
-               color=colors['negative'], edgecolor=colors['negative'])
+               color=down_color, edgecolor=down_color, alpha=0.95, linewidth=0.5)
 
-        ax.set_ylabel('Price', color=colors['text'])
-        ax.grid(True, alpha=0.3, color=colors['grid'])
+        # Add current price annotation
+        if len(closes) > 0:
+            current_price = closes[-1]
+            last_date = dates[-1]
+            price_color = up_color if closes[-1] >= opens[-1] else down_color
+
+            # Price line across chart
+            ax.axhline(y=current_price, color=price_color, linestyle='--',
+                      alpha=0.5, linewidth=1)
+
+            # Price label on right side
+            ax.annotate(f'${current_price:,.2f}',
+                       xy=(last_date, current_price),
+                       xytext=(5, 0), textcoords='offset points',
+                       fontsize=9, fontweight='bold',
+                       color=price_color,
+                       bbox=dict(boxstyle='round,pad=0.3',
+                                facecolor=colors['background'],
+                                edgecolor=price_color, alpha=0.9))
+
+        # Add high/low markers for visible range
+        visible_high = highs.max()
+        visible_low = lows.min()
+        high_idx = np.argmax(highs)
+        low_idx = np.argmin(lows)
+
+        # High marker
+        ax.annotate(f'H: ${visible_high:,.2f}',
+                   xy=(dates[high_idx], visible_high),
+                   xytext=(0, 8), textcoords='offset points',
+                   fontsize=8, color=up_color, ha='center',
+                   fontweight='bold')
+
+        # Low marker
+        ax.annotate(f'L: ${visible_low:,.2f}',
+                   xy=(dates[low_idx], visible_low),
+                   xytext=(0, -12), textcoords='offset points',
+                   fontsize=8, color=down_color, ha='center',
+                   fontweight='bold')
+
+        ax.set_ylabel('Price (USD)', color=colors['text'], fontsize=10, fontweight='bold')
+        ax.grid(True, alpha=0.2, color=colors['grid'], linestyle='-', linewidth=0.5)
+
+        # Add subtle background gradient effect
+        ax.set_facecolor(colors['background'])
 
     def _draw_overlays(self, ax, df: pd.DataFrame, colors: Dict):
         """Draw overlay indicators on main chart"""
@@ -707,7 +813,26 @@ class ChartPanel(QWidget):
         if indicator == 'volume':
             if 'volume' in df.columns:
                 up = df['close'] >= df['open']
-                vol_colors = [colors['positive'] if u else colors['negative'] for u in up]
+                volumes = df['volume'].values
+
+                # Enhanced volume colors with gradient effect
+                up_color = '#26a69a'  # Teal green
+                down_color = '#ef5350'  # Coral red
+
+                # Calculate relative volume for color intensity
+                vol_ma = df['volume'].rolling(20).mean().fillna(df['volume'].mean())
+                vol_ratio = df['volume'] / vol_ma
+
+                # Create color array with intensity based on relative volume
+                vol_colors = []
+                vol_alphas = []
+                for i, (is_up, ratio) in enumerate(zip(up, vol_ratio)):
+                    base_color = up_color if is_up else down_color
+                    # Higher volume = more opaque
+                    alpha = min(0.9, max(0.3, 0.4 + ratio * 0.2))
+                    vol_colors.append(base_color)
+                    vol_alphas.append(alpha)
+
                 # Calculate bar width based on time interval
                 if len(dates) > 1:
                     diff = dates[1] - dates[0]
@@ -717,10 +842,41 @@ class ChartPanel(QWidget):
                         width = 0.8
                 else:
                     width = 0.8
-                ax.bar(dates, df['volume'], color=vol_colors, alpha=0.7, width=width)
-                ax.set_ylabel('Volume', color=colors['text'], fontsize=9)
-                # Format volume axis
+
+                # Draw volume bars
+                for i, (date, vol, color, alpha) in enumerate(zip(dates, volumes, vol_colors, vol_alphas)):
+                    ax.bar(date, vol, color=color, alpha=alpha, width=width, edgecolor='none')
+
+                # Add volume moving average line
+                vol_ma_values = vol_ma.values
+                ax.plot(dates, vol_ma_values, color=colors['accent'], linewidth=1.2,
+                       alpha=0.7, label='Vol MA(20)')
+
+                # Add current volume annotation
+                if len(volumes) > 0:
+                    current_vol = volumes[-1]
+                    avg_vol = vol_ma_values[-1] if len(vol_ma_values) > 0 else volumes.mean()
+                    vol_change = ((current_vol / avg_vol) - 1) * 100 if avg_vol > 0 else 0
+
+                    vol_text = f'Vol: {current_vol:,.0f}'
+                    if vol_change > 20:
+                        vol_text += f' (+{vol_change:.0f}%)'
+                    elif vol_change < -20:
+                        vol_text += f' ({vol_change:.0f}%)'
+
+                    ax.annotate(vol_text,
+                               xy=(dates[-1], current_vol),
+                               xytext=(5, 0), textcoords='offset points',
+                               fontsize=8, color=colors['text'],
+                               bbox=dict(boxstyle='round,pad=0.2',
+                                        facecolor=colors['background'],
+                                        edgecolor=colors['grid'], alpha=0.8))
+
+                ax.set_ylabel('Volume', color=colors['text'], fontsize=9, fontweight='bold')
+                # Format volume axis with better readability
                 ax.ticklabel_format(axis='y', style='scientific', scilimits=(6, 6))
+                ax.legend(loc='upper left', fontsize=7, facecolor=colors['background'],
+                         edgecolor=colors['grid'], labelcolor=colors['text'])
 
         elif indicator == 'rsi':
             if 'rsi' in df.columns:

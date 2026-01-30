@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
 import hashlib
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ class DataStorage:
             # Save metadata
             metadata_path = dataset_dir / "metadata.json"
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(full_metadata, f, indent=2)
+                json.dump(full_metadata, f, indent=2, default=self._json_serializer)
             full_metadata['files'].append('metadata.json')
             logger.info(f"Saved metadata to: {metadata_path}")
 
@@ -135,7 +136,7 @@ class DataStorage:
 
             # Update metadata with file list
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(full_metadata, f, indent=2)
+                json.dump(full_metadata, f, indent=2, default=self._json_serializer)
 
             logger.info(f"Dataset saved successfully: {dataset_dir}")
             return dataset_dir
@@ -324,7 +325,18 @@ class DataStorage:
     def _save_json(self, path: Path, data: List[Dict]):
         """Save data in JSON format"""
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, default=self._json_serializer)
+
+    def _json_serializer(self, obj):
+        """Custom JSON serializer for objects not serializable by default"""
+        import pandas as pd
+        if isinstance(obj, (pd.Timestamp, datetime)):
+            return obj.isoformat()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if hasattr(obj, 'item'):  # numpy scalar types
+            return obj.item()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
     def _load_json(self, path: Path) -> List[Dict]:
         """Load data from JSON format"""

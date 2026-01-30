@@ -1,0 +1,35 @@
+{
+  "symbol": "XMRUSDT",
+  "candle_count": 43184,
+  "interval": "1h",
+  "fetch_timestamp": "2026-01-30T11:23:37.912599",
+  "date_range": {
+    "start": "2019-03-16T18:30:00",
+    "end": "2024-02-20T07:30:00",
+    "start_timestamp": 1552741200000,
+    "end_timestamp": 1708394400000
+  },
+  "data_points": 43184,
+  "files": [
+    "metadata.json",
+    "data.csv",
+    "data.json"
+  ],
+  "user_metadata": {
+    "symbol": "XMRUSDT",
+    "interval": "1h",
+    "max_candles_requested": 50000,
+    "actual_candles_fetched": 43184,
+    "fetch_timestamp": "2026-01-30T11:23:37.911822",
+    "features_computed": true,
+    "target_column": "direction",
+    "features": [
+      "rsi",
+      "macd",
+      "volatility_20",
+      "bb_position",
+      "return_1h",
+      "volume_ratio"
+    ]
+  }
+}

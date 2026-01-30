@@ -6,7 +6,6 @@ Provides PyQt6 interface for:
 - Model hyperparameter configuration
 - Training progress with loss curves
 - Prediction and inference
-- Model testing and validation
 """
 
 from PyQt6.QtWidgets import (
@@ -14,13 +13,12 @@ from PyQt6.QtWidgets import (
     QPushButton, QProgressBar, QGroupBox, QLineEdit, QDoubleSpinBox,
     QSpinBox, QTextEdit, QSplitter, QFrame, QGridLayout, QCheckBox,
     QScrollArea, QSlider, QRadioButton, QButtonGroup, QFileDialog,
-    QMessageBox
+    QMessageBox, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
-from matplotlib.gridspec import GridSpec
 from pathlib import Path
 from typing import Dict, Optional, List, Any
 import json
@@ -38,12 +36,10 @@ class MLPanel(QWidget):
     2. Model Configuration - Hyperparameters and settings
     3. Training Progress - Live metrics, loss curves, logs
     4. Prediction & Inference - Generate and visualize predictions
-    5. Model Testing - Validation metrics and visualization
 
     Signals:
         train_requested(dict, list): Config dict and selected symbols when training starts
         predict_requested(str, str): Model path and symbol for prediction
-        model_test_requested(str, str): Model path and symbol for testing
     """
 
     train_requested = pyqtSignal(dict, list)
@@ -55,7 +51,6 @@ class MLPanel(QWidget):
         super().__init__(parent)
         self._training_active = False
         self._available_datasets = {}
-        self._dataset_vars = {}
         self._train_loss_history = []
         self._val_loss_history = []
         self._epochs = []
@@ -82,7 +77,7 @@ class MLPanel(QWidget):
         header.setProperty("class", "title")
         layout.addWidget(header)
 
-        subtitle = QLabel("Temporal Fusion Transformer for multi-asset cryptocurrency forecasting")
+        subtitle = QLabel("RankNet AI for cryptocurrency direction prediction")
         subtitle.setProperty("class", "secondary")
         layout.addWidget(subtitle)
 
@@ -102,10 +97,6 @@ class MLPanel(QWidget):
         prediction_section = self._create_prediction_section()
         layout.addWidget(prediction_section)
 
-        # Section 5: Model Testing
-        testing_section = self._create_testing_section()
-        layout.addWidget(testing_section)
-
         layout.addStretch()
 
         scroll.setWidget(content)
@@ -116,14 +107,39 @@ class MLPanel(QWidget):
         group = QGroupBox("Dataset Configuration")
         layout = QVBoxLayout(group)
 
-        # Dataset selection label
-        layout.addWidget(QLabel("Select Datasets for Training:"))
+        # Dataset selection row with dropdown + refresh
+        select_row = QHBoxLayout()
+        select_row.addWidget(QLabel("Select Dataset for Training:"))
 
-        # Dataset checkboxes container
-        self.datasets_container = QWidget()
-        self.datasets_layout = QVBoxLayout(self.datasets_container)
-        self.datasets_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.datasets_container)
+        self.dataset_combo = QComboBox()
+        self.dataset_combo.setMinimumWidth(300)
+        self.dataset_combo.setPlaceholderText("No datasets found")
+        self.dataset_combo.setEditable(False)
+        select_row.addWidget(self.dataset_combo, stretch=1)
+
+        self.dataset_refresh_btn = QPushButton("Refresh")
+        self.dataset_refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_medium']};
+                color: {COLORS['text_primary']};
+                font-weight: bold;
+                padding: 6px 14px;
+                border-radius: 4px;
+                border: 1px solid {COLORS['border']};
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['border']};
+            }}
+        """)
+        self.dataset_refresh_btn.clicked.connect(self._refresh_datasets)
+        select_row.addWidget(self.dataset_refresh_btn)
+
+        layout.addLayout(select_row)
+
+        # Dataset info label
+        self.dataset_count_label = QLabel("0 datasets available")
+        self.dataset_count_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        layout.addWidget(self.dataset_count_label)
 
         # Split ratios
         split_label = QLabel("Data Split Ratios:")
@@ -192,13 +208,11 @@ class MLPanel(QWidget):
         self.config_inputs = {}
 
         params = [
-            ('hidden_size', 'Hidden Size', 32, 8, 512),
-            ('lstm_layers', 'LSTM Layers', 1, 1, 8),
-            ('attention_head_size', 'Attention Heads', 4, 1, 16),
-            ('dropout', 'Dropout', 0.4, 0.0, 0.9),
-            ('batch_size', 'Batch Size', 128, 16, 512),
-            ('max_epochs', 'Max Epochs', 50, 1, 500),
-            ('learning_rate', 'Learning Rate', 0.0005, 0.0001, 0.01),
+            ('hidden_size', 'Hidden Size', 128, 8, 512),
+            ('num_blocks', 'Num Blocks', 3, 1, 8),
+            ('dropout', 'Dropout', 0.1, 0.0, 0.9),
+            ('max_epochs', 'Max Epochs', 20, 1, 500),
+            ('learning_rate', 'Learning Rate', 0.001, 0.0001, 0.01),
         ]
 
         for i, (key, label, default, min_val, max_val) in enumerate(params):
@@ -241,21 +255,6 @@ class MLPanel(QWidget):
         config_btn_layout.addStretch()
         layout.addLayout(config_btn_layout)
 
-        # Model Architecture
-        arch_layout = QHBoxLayout()
-        arch_layout.addWidget(QLabel("Model Architecture:"))
-
-        self.arch_group = QButtonGroup(self)
-        self.lstm_radio = QRadioButton("LSTM (Recommended)")
-        self.lstm_radio.setChecked(True)
-        self.tft_radio = QRadioButton("TFT (Advanced)")
-        self.arch_group.addButton(self.lstm_radio)
-        self.arch_group.addButton(self.tft_radio)
-
-        arch_layout.addWidget(self.lstm_radio)
-        arch_layout.addWidget(self.tft_radio)
-        arch_layout.addStretch()
-        layout.addLayout(arch_layout)
 
         # Training Mode
         mode_layout = QHBoxLayout()
@@ -322,6 +321,37 @@ class MLPanel(QWidget):
         self.progress_bar.setValue(0)
         layout.addWidget(self.progress_bar)
 
+        # ICE (Information Coefficient) Display - Prominent metrics box
+        ice_frame = QFrame()
+        ice_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        ice_frame.setStyleSheet(f"background-color: {COLORS['bg_medium']}; border-radius: 8px; padding: 8px;")
+        ice_layout = QGridLayout(ice_frame)
+
+        # IC Label
+        ice_layout.addWidget(QLabel("Information Coefficient (IC):"), 0, 0)
+        self.ic_value_label = QLabel("--")
+        self.ic_value_label.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {COLORS['accent']};")
+        ice_layout.addWidget(self.ic_value_label, 0, 1)
+
+        # IC Rating
+        self.ic_rating_label = QLabel("Train a model to see IC")
+        self.ic_rating_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-style: italic;")
+        ice_layout.addWidget(self.ic_rating_label, 0, 2)
+
+        # Sharpe Ratio
+        ice_layout.addWidget(QLabel("Sharpe Ratio:"), 1, 0)
+        self.sharpe_value_label = QLabel("--")
+        self.sharpe_value_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {COLORS['accent']};")
+        ice_layout.addWidget(self.sharpe_value_label, 1, 1)
+
+        # Accuracy
+        ice_layout.addWidget(QLabel("Test Accuracy:"), 1, 2)
+        self.test_acc_label = QLabel("--")
+        self.test_acc_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {COLORS['accent']};")
+        ice_layout.addWidget(self.test_acc_label, 1, 3)
+
+        layout.addWidget(ice_frame)
+
         # Loss chart
         colors = get_chart_colors()
         self.loss_figure = Figure(figsize=(8, 3), facecolor=colors['background'])
@@ -355,157 +385,174 @@ class MLPanel(QWidget):
         return group
 
     def _create_prediction_section(self) -> QGroupBox:
-        """Create prediction section"""
-        group = QGroupBox("Prediction & Inference")
+        """Create prediction section with AI direction recommendation"""
+        group = QGroupBox("AI Prediction - Investment Direction")
         layout = QVBoxLayout(group)
 
-        # Model selection
-        model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("Load Model:"))
-        self.model_path_input = QLineEdit()
-        self.model_path_input.setReadOnly(True)
-        self.model_path_input.setPlaceholderText("No model loaded")
-        model_row.addWidget(self.model_path_input, stretch=1)
-        browse_model_btn = QPushButton("Browse")
-        browse_model_btn.clicked.connect(self._browse_model)
-        model_row.addWidget(browse_model_btn)
-        layout.addLayout(model_row)
-
-        # Symbol selection
-        symbol_row = QHBoxLayout()
-        symbol_row.addWidget(QLabel("Predict For:"))
+        # Symbol selection row
+        select_row = QHBoxLayout()
+        select_row.addWidget(QLabel("Select Crypto:"))
         self.predict_symbol_combo = QComboBox()
-        symbol_row.addWidget(self.predict_symbol_combo)
+        self.predict_symbol_combo.setMinimumWidth(150)
+        self.predict_symbol_combo.currentIndexChanged.connect(self._check_model_availability)
+        select_row.addWidget(self.predict_symbol_combo)
 
-        predict_btn = QPushButton("Generate 10-Hour Prediction")
-        predict_btn.setStyleSheet(f"background-color: {COLORS['primary']}; color: white; font-weight: bold; padding: 10px 24px;")
-        predict_btn.clicked.connect(self._generate_prediction)
-        symbol_row.addWidget(predict_btn)
-        symbol_row.addStretch()
-        layout.addLayout(symbol_row)
+        select_row.addWidget(QLabel("Timeframe:"))
+        self.predict_timeframe_combo = QComboBox()
+        self.predict_timeframe_combo.setMinimumWidth(80)
+        timeframes = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w']
+        for tf in timeframes:
+            self.predict_timeframe_combo.addItem(tf, tf)
+        self.predict_timeframe_combo.setCurrentText('1h')
+        self.predict_timeframe_combo.currentIndexChanged.connect(self._check_model_availability)
+        select_row.addWidget(self.predict_timeframe_combo)
 
-        # Prediction result
-        self.prediction_label = QLabel("No predictions yet. Load a model and select a symbol.")
-        self.prediction_label.setProperty("class", "secondary")
-        layout.addWidget(self.prediction_label)
+        self.predict_btn = QPushButton("Get AI Prediction")
+        self.predict_btn.setStyleSheet(f"background-color: {COLORS['primary']}; color: white; font-weight: bold; padding: 12px 24px;")
+        self.predict_btn.clicked.connect(self._generate_ai_prediction)
+        select_row.addWidget(self.predict_btn)
 
-        # Trading signals section
-        signals_group = QFrame()
-        signals_group.setFrameShape(QFrame.Shape.StyledPanel)
-        signals_layout = QVBoxLayout(signals_group)
+        self.refresh_data_btn = QPushButton("Refresh Data")
+        self.refresh_data_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_medium']};
+                color: {COLORS['text_primary']};
+                font-weight: bold;
+                padding: 12px 16px;
+                border-radius: 4px;
+                border: 1px solid {COLORS['border']};
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['border']};
+            }}
+        """)
+        self.refresh_data_btn.clicked.connect(self._on_refresh_data)
+        select_row.addWidget(self.refresh_data_btn)
 
-        signals_header = QHBoxLayout()
-        signals_header.addWidget(QLabel("TRADING SIGNALS (Real-Time)"))
+        select_row.addStretch()
+        layout.addLayout(select_row)
 
-        update_signal_btn = QPushButton("Update Signal")
-        update_signal_btn.clicked.connect(self._generate_quick_signal)
-        signals_header.addWidget(update_signal_btn)
-        signals_layout.addLayout(signals_header)
+        # Model availability status
+        self.model_status_label = QLabel("Select a symbol and timeframe")
+        self.model_status_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-style: italic;")
+        layout.addWidget(self.model_status_label)
 
-        self.signal_label = QLabel("Click 'Update Signal' to get trading signal")
-        self.signal_label.setStyleSheet("font-size: 16px; font-weight: bold;")
-        signals_layout.addWidget(self.signal_label)
+        # Main prediction display - big direction indicator
+        self.direction_frame = QFrame()
+        self.direction_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self.direction_frame.setStyleSheet(f"background-color: {COLORS['bg_medium']}; border-radius: 8px; padding: 16px;")
+        direction_layout = QVBoxLayout(self.direction_frame)
 
-        self.tech_indicators_label = QLabel("Technical Indicators: RSI | MACD | Trend | Volume")
-        self.tech_indicators_label.setProperty("class", "secondary")
-        signals_layout.addWidget(self.tech_indicators_label)
+        # Direction arrow and text
+        self.direction_label = QLabel("--")
+        self.direction_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.direction_label.setStyleSheet("font-size: 48px; font-weight: bold;")
+        direction_layout.addWidget(self.direction_label)
 
-        self.risk_levels_label = QLabel("")
-        signals_layout.addWidget(self.risk_levels_label)
+        self.direction_text = QLabel("Select a crypto and click 'Get AI Prediction'")
+        self.direction_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.direction_text.setStyleSheet("font-size: 18px;")
+        direction_layout.addWidget(self.direction_text)
 
-        layout.addWidget(signals_group)
+        # Confidence bar
+        conf_row = QHBoxLayout()
+        conf_row.addWidget(QLabel("Confidence:"))
+        self.confidence_bar = QProgressBar()
+        self.confidence_bar.setRange(0, 100)
+        self.confidence_bar.setValue(0)
+        self.confidence_bar.setStyleSheet("""
+            QProgressBar { border: 1px solid #555; border-radius: 4px; text-align: center; }
+            QProgressBar::chunk { background-color: #4CAF50; }
+        """)
+        conf_row.addWidget(self.confidence_bar, stretch=1)
+        self.confidence_label = QLabel("--")
+        self.confidence_label.setMinimumWidth(50)
+        conf_row.addWidget(self.confidence_label)
+        direction_layout.addLayout(conf_row)
 
-        # Prediction chart
-        colors = get_chart_colors()
-        self.pred_figure = Figure(figsize=(10, 4), facecolor=colors['background'])
-        self.pred_ax = self.pred_figure.add_subplot(111)
-        self.pred_ax.set_facecolor(colors['background'])
-        self.pred_ax.set_title('10-Hour Price Prediction', color=colors['text'])
-        self.pred_ax.set_xlabel('Hours Ahead', color=colors['text'])
-        self.pred_ax.set_ylabel('Price (Normalized)', color=colors['text'])
-        self.pred_ax.tick_params(colors=colors['text'])
-        self.pred_ax.grid(True, alpha=0.3, color=colors['grid'])
+        layout.addWidget(self.direction_frame)
 
-        self.pred_canvas = FigureCanvas(self.pred_figure)
-        self.pred_canvas.setMinimumHeight(300)
-        layout.addWidget(self.pred_canvas)
+        # Prediction details
+        details_frame = QFrame()
+        details_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        details_layout = QGridLayout(details_frame)
+
+        details_layout.addWidget(QLabel("Prediction Horizon:"), 0, 0)
+        self.horizon_label = QLabel("4 hours ahead")
+        self.horizon_label.setStyleSheet(f"color: {COLORS['accent']};")
+        details_layout.addWidget(self.horizon_label, 0, 1)
+
+        details_layout.addWidget(QLabel("Model Accuracy:"), 0, 2)
+        self.accuracy_label = QLabel("--")
+        self.accuracy_label.setStyleSheet(f"color: {COLORS['accent']};")
+        details_layout.addWidget(self.accuracy_label, 0, 3)
+
+        details_layout.addWidget(QLabel("Model IC:"), 1, 0)
+        self.ic_label = QLabel("--")
+        self.ic_label.setStyleSheet(f"color: {COLORS['accent']};")
+        details_layout.addWidget(self.ic_label, 1, 1)
+
+        details_layout.addWidget(QLabel("Last Updated:"), 1, 2)
+        self.last_update_label = QLabel("--")
+        self.last_update_label.setStyleSheet(f"color: {COLORS['accent']};")
+        details_layout.addWidget(self.last_update_label, 1, 3)
+
+        layout.addWidget(details_frame)
+
+        # Signal Readiness scrollable panel
+        readiness_group = QGroupBox("Signal Readiness")
+        readiness_layout = QVBoxLayout(readiness_group)
+
+        readiness_scroll = QScrollArea()
+        readiness_scroll.setWidgetResizable(True)
+        readiness_scroll.setMinimumHeight(120)
+        readiness_scroll.setMaximumHeight(250)
+        readiness_scroll.setStyleSheet(f"""
+            QScrollArea {{
+                border: none;
+                background-color: {COLORS['bg_dark']};
+            }}
+        """)
+
+        self._readiness_container = QWidget()
+        self._readiness_grid = QGridLayout(self._readiness_container)
+        self._readiness_grid.setContentsMargins(8, 8, 8, 8)
+        self._readiness_grid.setSpacing(6)
+
+        # Header row
+        hdr_symbol = QLabel("Symbol")
+        hdr_symbol.setStyleSheet("font-weight: bold; font-size: 11px;")
+        hdr_signal = QLabel("Signal")
+        hdr_signal.setStyleSheet("font-weight: bold; font-size: 11px;")
+        hdr_conf = QLabel("Confidence")
+        hdr_conf.setStyleSheet("font-weight: bold; font-size: 11px;")
+        hdr_status = QLabel("Status")
+        hdr_status.setStyleSheet("font-weight: bold; font-size: 11px;")
+        self._readiness_grid.addWidget(hdr_symbol, 0, 0)
+        self._readiness_grid.addWidget(hdr_signal, 0, 1)
+        self._readiness_grid.addWidget(hdr_conf, 0, 2)
+        self._readiness_grid.addWidget(hdr_status, 0, 3)
+
+        # Populated dynamically by _scan_datasets / _on_refresh_data
+        self._signal_rows = {}  # symbol -> (signal_label, conf_label, status_label)
+
+        readiness_scroll.setWidget(self._readiness_container)
+        readiness_layout.addWidget(readiness_scroll)
+        layout.addWidget(readiness_group)
+
+        # Disclaimer
+        disclaimer = QLabel("Note: AI predictions are based on historical patterns. Past performance does not guarantee future results. Always do your own research.")
+        disclaimer.setWordWrap(True)
+        disclaimer.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-style: italic;")
+        layout.addWidget(disclaimer)
+
+        # Hidden fields for model path (used by browse)
+        self.model_path_input = QLineEdit()
+        self.model_path_input.setVisible(False)
+        layout.addWidget(self.model_path_input)
 
         return group
 
-    def _create_testing_section(self) -> QGroupBox:
-        """Create model testing section"""
-        group = QGroupBox("Model Testing & Validation")
-        layout = QVBoxLayout(group)
-
-        # Test controls
-        controls_row = QHBoxLayout()
-        controls_row.addWidget(QLabel("Test on historical data:"))
-
-        test_btn = QPushButton("Run Model Test")
-        test_btn.setStyleSheet(f"background-color: {COLORS['warning']}; color: white; font-weight: bold; padding: 10px 24px;")
-        test_btn.clicked.connect(self._run_model_test)
-        controls_row.addWidget(test_btn)
-        controls_row.addStretch()
-        layout.addLayout(controls_row)
-
-        # Metrics grid
-        metrics_frame = QFrame()
-        metrics_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        metrics_layout = QGridLayout(metrics_frame)
-
-        self.test_metrics = {}
-        metrics = [
-            ('mae', 'MAE'),
-            ('rmse', 'RMSE'),
-            ('dir_acc', 'Dir Accuracy'),
-            ('test_loss', 'Test Loss'),
-        ]
-
-        for i, (key, label) in enumerate(metrics):
-            metrics_layout.addWidget(QLabel(f"{label}:"), i // 2, (i % 2) * 2)
-            val_label = QLabel("--")
-            val_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-            self.test_metrics[key] = val_label
-            metrics_layout.addWidget(val_label, i // 2, (i % 2) * 2 + 1)
-
-        layout.addWidget(metrics_frame)
-
-        # Test results chart with multiple subplots
-        colors = get_chart_colors()
-        self.test_figure = Figure(figsize=(14, 10), facecolor=colors['background'])
-        gs = GridSpec(3, 2, figure=self.test_figure, hspace=0.3, wspace=0.3)
-
-        # Actual vs Predicted
-        self.test_ax1 = self.test_figure.add_subplot(gs[0, :])
-        self.test_ax1.set_facecolor(colors['background'])
-        self.test_ax1.set_title('Actual vs Predicted (Test Set)', color=colors['text'])
-        self.test_ax1.tick_params(colors=colors['text'])
-        self.test_ax1.grid(True, alpha=0.3, color=colors['grid'])
-
-        # Direction accuracy over time
-        self.test_ax2 = self.test_figure.add_subplot(gs[1, 0])
-        self.test_ax2.set_facecolor(colors['background'])
-        self.test_ax2.tick_params(colors=colors['text'])
-
-        # Error distribution
-        self.test_ax3 = self.test_figure.add_subplot(gs[1, 1])
-        self.test_ax3.set_facecolor(colors['background'])
-        self.test_ax3.tick_params(colors=colors['text'])
-
-        # Confusion matrix
-        self.test_ax4 = self.test_figure.add_subplot(gs[2, 0])
-        self.test_ax4.set_facecolor(colors['background'])
-        self.test_ax4.tick_params(colors=colors['text'])
-
-        # Metrics summary
-        self.test_ax5 = self.test_figure.add_subplot(gs[2, 1])
-        self.test_ax5.set_facecolor(colors['background'])
-
-        self.test_canvas = FigureCanvas(self.test_figure)
-        self.test_canvas.setMinimumHeight(500)
-        layout.addWidget(self.test_canvas)
-
-        return group
 
     def _detect_gpu(self) -> str:
         """Detect GPU availability"""
@@ -532,60 +579,120 @@ class MLPanel(QWidget):
             dataset_dir = Path(AppConfig.DATASET_DIR)
 
             if not dataset_dir.exists():
-                self._update_dataset_checkboxes()
+                self._update_dataset_dropdown()
                 return
 
             for symbol_dir in dataset_dir.iterdir():
                 if symbol_dir.is_dir() and symbol_dir.name not in ['.', '..']:
-                    datasets = [d for d in symbol_dir.iterdir() if d.is_dir()]
+                    # Find subdirs that have metadata.json or CSV files
+                    valid_dirs = []
+                    for d in symbol_dir.iterdir():
+                        if d.is_dir():
+                            has_meta = (d / 'metadata.json').exists()
+                            has_csv = any(d.glob("*.csv"))
+                            if has_meta or has_csv:
+                                valid_dirs.append(d)
 
-                    if datasets:
-                        latest = sorted(datasets)[-1]
-                        metadata_path = latest / 'metadata.json'
+                    if not valid_dirs:
+                        continue
 
-                        if metadata_path.exists():
-                            with open(metadata_path) as f:
-                                metadata = json.load(f)
+                    # Pick latest by name (timestamp-based dir names sort correctly)
+                    latest = sorted(valid_dirs)[-1]
+                    metadata_path = latest / 'metadata.json'
 
-                            self._available_datasets[symbol_dir.name] = {
-                                'path': latest,
-                                'candles': metadata.get('candle_count', 0),
-                                'metadata': metadata
-                            }
+                    candle_count = 0
+                    metadata = {}
+                    if metadata_path.exists():
+                        with open(metadata_path) as f:
+                            metadata = json.load(f)
+                        candle_count = metadata.get('candle_count', 0)
+                    else:
+                        # Count rows from largest CSV as fallback
+                        csv_files = list(latest.glob("*.csv"))
+                        if csv_files:
+                            largest = max(csv_files, key=lambda f: f.stat().st_size)
+                            try:
+                                import pandas as pd
+                                candle_count = len(pd.read_csv(largest, nrows=0).columns) and sum(1 for _ in open(largest)) - 1
+                            except Exception:
+                                candle_count = 0
 
-            self._update_dataset_checkboxes()
+                    self._available_datasets[symbol_dir.name] = {
+                        'path': latest,
+                        'candles': candle_count,
+                        'metadata': metadata
+                    }
+
+            self._update_dataset_dropdown()
             self._update_symbol_combo()
+            self._populate_signal_readiness()
 
         except Exception as e:
             print(f"Failed to scan datasets: {e}")
 
-    def _update_dataset_checkboxes(self):
-        """Update dataset checkboxes"""
-        # Clear existing
-        while self.datasets_layout.count():
-            item = self.datasets_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+    def _update_dataset_dropdown(self):
+        """Update dataset dropdown with available datasets"""
+        self.dataset_combo.clear()
 
         if not self._available_datasets:
-            no_data = QLabel("No datasets found. Use Data Pipeline to download cryptocurrency data.")
-            no_data.setProperty("class", "secondary")
-            no_data.setStyleSheet("font-style: italic;")
-            self.datasets_layout.addWidget(no_data)
+            self.dataset_count_label.setText("0 datasets found")
             return
 
-        self._dataset_vars = {}
-        for symbol, info in self._available_datasets.items():
-            cb = QCheckBox(f"{symbol} ({info['candles']:,} candles)")
-            cb.setChecked(True)
-            self._dataset_vars[symbol] = cb
-            self.datasets_layout.addWidget(cb)
+        for symbol in sorted(self._available_datasets.keys()):
+            info = self._available_datasets[symbol]
+            self.dataset_combo.addItem(f"{symbol} ({info['candles']:,} candles)", symbol)
+
+        self.dataset_count_label.setText(
+            f"{self.dataset_combo.count()} dataset(s) available"
+        )
+
+    def _get_selected_datasets(self) -> list:
+        """Get the single selected dataset symbol from the dropdown."""
+        symbol = self.dataset_combo.currentData()
+        if symbol:
+            return [symbol]
+        return []
+
+    def _refresh_datasets(self):
+        """Refresh button handler - rescan datasets."""
+        self._available_datasets.clear()
+        self._scan_datasets()
+        self.log_message("[REFRESH] Dataset scan complete")
 
     def _update_symbol_combo(self):
-        """Update prediction symbol dropdown"""
+        """Update prediction symbol dropdown with trained models first"""
         self.predict_symbol_combo.clear()
-        symbols = list(self._available_datasets.keys())
-        self.predict_symbol_combo.addItems(symbols)
+
+        # Get symbols with trained models (prioritize these)
+        from pathlib import Path
+        trained_symbols = set()
+        checkpoint_dir = Path("models/checkpoints")
+        if checkpoint_dir.exists():
+            for d in checkpoint_dir.iterdir():
+                if d.is_dir() and any(d.glob("*.pt")):
+                    trained_symbols.add(d.name)
+
+        # Get all available symbols from Binance
+        try:
+            from src.gui_pyqt.utils.symbols import get_all_usdt_symbols
+            all_symbols = set(get_all_usdt_symbols())
+        except Exception:
+            # Fallback to datasets only
+            all_symbols = set(self._available_datasets.keys())
+
+        # Also include symbols from local datasets
+        all_symbols.update(self._available_datasets.keys())
+
+        # Combine: trained models first, then others alphabetically
+        trained_list = sorted(trained_symbols)
+        other_list = sorted(all_symbols - trained_symbols)
+
+        # Add with markers
+        for sym in trained_list:
+            self.predict_symbol_combo.addItem(f"{sym} [AI Ready]", sym)
+
+        for sym in other_list:
+            self.predict_symbol_combo.addItem(sym, sym)
 
     def _update_split_labels(self):
         """Update split ratio labels"""
@@ -604,13 +711,11 @@ class MLPanel(QWidget):
     def _load_defaults(self):
         """Load default configuration"""
         defaults = {
-            'hidden_size': 32,
-            'lstm_layers': 1,
-            'attention_head_size': 4,
-            'dropout': 0.4,
-            'batch_size': 128,
-            'max_epochs': 50,
-            'learning_rate': 0.0005,
+            'hidden_size': 128,
+            'num_blocks': 3,
+            'dropout': 0.1,
+            'max_epochs': 20,
+            'learning_rate': 0.001,
         }
 
         for key, value in defaults.items():
@@ -681,7 +786,7 @@ class MLPanel(QWidget):
         """Get current configuration"""
         config = {key: spin.value() for key, spin in self.config_inputs.items()}
         config['use_gpu'] = self.use_gpu_cb.isChecked()
-        config['architecture'] = 'lstm' if self.lstm_radio.isChecked() else 'tft'
+        config['architecture'] = 'lstm'
         config['training_mode'] = 'scratch' if self.scratch_radio.isChecked() else 'finetune'
         config['pretrained_path'] = self.pretrained_input.text() if not self.scratch_radio.isChecked() else None
         config['train_split'] = self.train_split_slider.value() / 100.0
@@ -689,11 +794,11 @@ class MLPanel(QWidget):
         return config
 
     def _start_training(self):
-        """Start model training"""
-        selected = [symbol for symbol, cb in self._dataset_vars.items() if cb.isChecked()]
+        """Start model training on the selected dataset"""
+        selected = self._get_selected_datasets()
 
         if not selected:
-            QMessageBox.warning(self, "No Datasets", "Please select at least one dataset for training.")
+            QMessageBox.warning(self, "No Dataset", "Please select a dataset for training.")
             return
 
         config = self._get_config()
@@ -709,7 +814,7 @@ class MLPanel(QWidget):
         self._val_loss_history = []
         self._epochs = []
 
-        self.log_message(f"[TRAINING] Starting training with {len(selected)} symbols")
+        self.log_message(f"[TRAINING] Starting training on {selected[0]}")
         self.train_requested.emit(config, selected)
 
     def _stop_training(self):
@@ -721,7 +826,7 @@ class MLPanel(QWidget):
     def _generate_prediction(self):
         """Generate prediction"""
         model_path = self.model_path_input.text()
-        symbol = self.predict_symbol_combo.currentText()
+        symbol = self.predict_symbol_combo.currentData() or self.predict_symbol_combo.currentText().replace(" [AI Ready]", "")
 
         if not model_path or model_path == "No model loaded":
             QMessageBox.warning(self, "No Model", "Please load a model first.")
@@ -735,29 +840,314 @@ class MLPanel(QWidget):
 
     def _generate_quick_signal(self):
         """Generate quick trading signal based on technical indicators"""
-        symbol = self.predict_symbol_combo.currentText()
+        symbol = self.predict_symbol_combo.currentData() or self.predict_symbol_combo.currentText().replace(" [AI Ready]", "")
         if not symbol:
-            self.signal_label.setText("[!] Select a symbol first")
             return
+        # Redirect to AI prediction
+        self._generate_ai_prediction()
 
-        # This would normally calculate based on real data
-        self.signal_label.setText(f"[?] Signal calculation requires data for {symbol}")
-        self.signal_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-
-    def _run_model_test(self):
-        """Run model test"""
-        model_path = self.model_path_input.text()
-        symbol = self.predict_symbol_combo.currentText()
-
-        if not model_path or model_path == "No model loaded":
-            QMessageBox.warning(self, "No Model", "Please load a model first.")
-            return
+    def _check_model_availability(self):
+        """Check if a trained model exists for the selected symbol and timeframe."""
+        symbol = self.predict_symbol_combo.currentData()
+        if symbol is None:
+            symbol = self.predict_symbol_combo.currentText().replace(" [AI Ready]", "")
+        timeframe = self.predict_timeframe_combo.currentData() or '1h'
 
         if not symbol:
-            QMessageBox.warning(self, "No Symbol", "Please select a symbol.")
+            self.model_status_label.setText("Select a symbol and timeframe")
+            self.model_status_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-style: italic;")
+            self.predict_btn.setEnabled(True)
             return
 
-        self.model_test_requested.emit(model_path, symbol)
+        from pathlib import Path
+        model_path = Path(f"models/checkpoints/{symbol}/ranknet_{timeframe}.pt")
+        legacy_path = Path(f"models/checkpoints/{symbol}/ranknet_model.pt")
+
+        if model_path.exists():
+            self.model_status_label.setText(f"Model available for {symbol} @ {timeframe}")
+            self.model_status_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 11px; font-weight: bold;")
+            self.predict_btn.setEnabled(True)
+        elif timeframe == '1h' and legacy_path.exists():
+            self.model_status_label.setText(f"Model available for {symbol} @ 1h (legacy)")
+            self.model_status_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 11px; font-weight: bold;")
+            self.predict_btn.setEnabled(True)
+        else:
+            # List available timeframes for this symbol
+            checkpoint_dir = Path(f"models/checkpoints/{symbol}")
+            available_tfs = []
+            if checkpoint_dir.exists():
+                for f in checkpoint_dir.glob("ranknet_*.pt"):
+                    tf = f.stem.replace("ranknet_", "")
+                    if tf != "model":
+                        available_tfs.append(tf)
+                # Check legacy model
+                if (checkpoint_dir / "ranknet_model.pt").exists():
+                    available_tfs.append("1h (legacy)")
+
+            if available_tfs:
+                self.model_status_label.setText(
+                    f"No model for {symbol} @ {timeframe}. Available: {', '.join(available_tfs)}"
+                )
+            else:
+                self.model_status_label.setText(f"No model for {symbol}. Train a model first.")
+            self.model_status_label.setStyleSheet(f"color: {COLORS['danger']}; font-size: 11px;")
+            self.predict_btn.setEnabled(False)
+
+    def _resolve_model_path(self, symbol: str, timeframe: str):
+        """Resolve model path for a symbol and timeframe. Returns Path or None."""
+        from pathlib import Path
+        model_path = Path(f"models/checkpoints/{symbol}/ranknet_{timeframe}.pt")
+        if model_path.exists():
+            return model_path
+        # Legacy fallback for 1h models
+        if timeframe == '1h':
+            legacy_path = Path(f"models/checkpoints/{symbol}/ranknet_model.pt")
+            if legacy_path.exists():
+                return legacy_path
+        return None
+
+    def _generate_ai_prediction(self):
+        """Generate AI prediction for investment direction using RankNet.
+
+        Fetches live/recent candlestick data from the exchange API at the
+        selected timeframe and runs inference through the pre-trained model.
+        """
+        # Get actual symbol (not display text which may include "[AI Ready]")
+        symbol = self.predict_symbol_combo.currentData()
+        if symbol is None:
+            symbol = self.predict_symbol_combo.currentText().replace(" [AI Ready]", "")
+        if not symbol:
+            QMessageBox.warning(self, "No Symbol", "Please select a cryptocurrency.")
+            return
+
+        timeframe = self.predict_timeframe_combo.currentData() or '1h'
+
+        try:
+            from datetime import datetime
+            import numpy as np
+            import pandas as pd
+            from src.ml.models.ranknet_model import RankNetPredictor
+
+            # --- Step 1: Resolve and load the pre-trained model ---
+            model_path = self._resolve_model_path(symbol, timeframe)
+            if model_path is None:
+                self.direction_label.setText("?")
+                self.direction_text.setText(
+                    f"No trained model for {symbol} @ {timeframe}. "
+                    "Train a model on this timeframe first."
+                )
+                self.direction_label.setStyleSheet(
+                    f"font-size: 48px; font-weight: bold; color: {COLORS['text_secondary']};"
+                )
+                return
+
+            try:
+                predictor = RankNetPredictor.load(str(model_path))
+                self.log_message(f"[RANKNET] Loaded model for {symbol} @ {timeframe}: {model_path.name}")
+            except Exception as e:
+                self.direction_label.setText("!")
+                self.direction_text.setText(f"Failed to load model: {e}")
+                self.direction_label.setStyleSheet(
+                    f"font-size: 48px; font-weight: bold; color: {COLORS['danger']};"
+                )
+                return
+
+            # --- Step 2: Fetch live/recent candlestick data from API ---
+            self.log_message(f"[RANKNET] Fetching live {timeframe} data for {symbol} from Binance...")
+            self.direction_text.setText("Fetching live market data...")
+            QApplication.processEvents()  # Allow UI to update
+
+            try:
+                from src.api.ccxt_client import get_ccxt_client
+                client = get_ccxt_client('binance')
+                ccxt_symbol = client.convert_symbol_format(symbol, to_ccxt=True)
+                df = client.get_ohlcv(ccxt_symbol, timeframe, 500)
+            except Exception as e:
+                self.direction_label.setText("!")
+                self.direction_text.setText(f"Failed to fetch live data: {e}")
+                self.direction_label.setStyleSheet(
+                    f"font-size: 48px; font-weight: bold; color: {COLORS['danger']};"
+                )
+                self.log_message(f"[RANKNET] API error: {e}")
+                return
+
+            if df is None or len(df) < 300:
+                count = len(df) if df is not None else 0
+                self.direction_label.setText("?")
+                self.direction_text.setText(
+                    f"Insufficient live data ({count} candles, need 300+). "
+                    "Try a larger timeframe or check connectivity."
+                )
+                return
+
+            self.log_message(f"[RANKNET] Fetched {len(df)} live {timeframe} candles for {symbol}")
+
+            # --- Step 3: Run prediction on live data ---
+            ohlcv_cols = ['open', 'high', 'low', 'close', 'volume']
+            missing = [c for c in ohlcv_cols if c not in df.columns]
+            if missing:
+                self.direction_label.setText("?")
+                self.direction_text.setText(f"Live data missing columns: {missing}")
+                return
+
+            result = predictor.predict(df[ohlcv_cols])
+
+            direction = result['direction']
+            confidence_val = result['confidence']
+            metrics = result['metrics']
+
+            # --- Step 4: Display results ---
+            if direction == "UP":
+                arrow = "▲"
+                color = COLORS['success']
+                recommendation = f"RankNet AI suggests {symbol} may go UP ({timeframe})"
+            elif direction == "DOWN":
+                arrow = "▼"
+                color = COLORS['danger']
+                recommendation = f"RankNet AI suggests {symbol} may go DOWN ({timeframe})"
+            else:
+                arrow = "◆"
+                color = COLORS['text_secondary']
+                recommendation = f"RankNet AI is uncertain about {symbol} direction ({timeframe})"
+
+            self.direction_label.setText(f"{arrow} {direction}")
+            self.direction_label.setStyleSheet(f"font-size: 48px; font-weight: bold; color: {color};")
+            self.direction_text.setText(recommendation)
+            self.direction_text.setStyleSheet(f"font-size: 18px; color: {color};")
+
+            # Confidence
+            confidence_pct = confidence_val * 100
+            self.confidence_bar.setValue(int(min(confidence_pct, 100)))
+            self.confidence_label.setText(f"{confidence_pct:.0f}%")
+
+            bar_colors = {"UP": "#4CAF50", "DOWN": "#F44336", "NEUTRAL": "#888"}
+            bar_color = bar_colors.get(direction, "#888")
+            self.confidence_bar.setStyleSheet(f"""
+                QProgressBar {{ border: 1px solid #555; border-radius: 4px; text-align: center; }}
+                QProgressBar::chunk {{ background-color: {bar_color}; }}
+            """)
+
+            # Update details
+            self.horizon_label.setText(f"30 candles ahead ({timeframe})")
+            self.accuracy_label.setText(f"{metrics.get('directional_accuracy', 0) * 100:.1f}%")
+            self.ic_label.setText(f"{metrics.get('ic', 0):.4f}")
+            self.last_update_label.setText(datetime.now().strftime("%H:%M:%S"))
+
+            # Update signal readiness panel
+            self._update_signal_readiness(symbol, direction, confidence_val)
+
+            self.log_message(
+                f"[RANKNET] {symbol} @ {timeframe}: {direction} (conf={confidence_pct:.0f}%, "
+                f"IC={metrics.get('ic', 0):.4f}, "
+                f"Sharpe={metrics.get('sharpe', 0):.2f}, "
+                f"WinRate={metrics.get('win_rate', 0) * 100:.1f}%)"
+            )
+
+        except Exception as e:
+            self.direction_label.setText("!")
+            self.direction_text.setText(f"Error: {str(e)}")
+            self.direction_label.setStyleSheet(f"font-size: 48px; font-weight: bold; color: {COLORS['danger']};")
+            import traceback
+            traceback.print_exc()
+
+
+    def _on_refresh_data(self):
+        """Refresh datasets and update signal readiness panel."""
+        self._available_datasets.clear()
+        self._scan_datasets()
+        self._populate_signal_readiness()
+        self.log_message("[REFRESH] Dataset scan complete")
+
+    def _populate_signal_readiness(self):
+        """Populate signal readiness rows from available datasets."""
+        # Clear existing rows (keep header at row 0)
+        for symbol, (sig_lbl, conf_lbl, stat_lbl) in self._signal_rows.items():
+            sig_lbl.deleteLater()
+            conf_lbl.deleteLater()
+            stat_lbl.deleteLater()
+        # Also remove the symbol name labels (column 0, rows 1+)
+        for i in reversed(range(self._readiness_grid.count())):
+            item = self._readiness_grid.itemAt(i)
+            if item and item.widget():
+                pos = self._readiness_grid.getItemPosition(i)
+                if pos[0] > 0:  # Skip header row
+                    item.widget().deleteLater()
+        self._signal_rows.clear()
+
+        # Get all symbols with data
+        symbols = sorted(self._available_datasets.keys())
+        if not symbols:
+            row = 1
+            no_data = QLabel("No datasets found. Use Data Pipeline tab to download data.")
+            no_data.setStyleSheet(f"color: {COLORS['text_secondary']}; font-style: italic; font-size: 11px;")
+            self._readiness_grid.addWidget(no_data, row, 0, 1, 4)
+            return
+
+        # Check which have trained models
+        checkpoint_dir = Path("models/checkpoints")
+
+        for i, symbol in enumerate(symbols):
+            row = i + 1
+
+            sym_label = QLabel(symbol)
+            sym_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 11px;")
+            self._readiness_grid.addWidget(sym_label, row, 0)
+
+            signal_label = QLabel("--")
+            signal_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+            self._readiness_grid.addWidget(signal_label, row, 1)
+
+            conf_label = QLabel("--")
+            conf_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+            self._readiness_grid.addWidget(conf_label, row, 2)
+
+            # Check if any model exists (timeframe-specific or legacy)
+            symbol_model_dir = checkpoint_dir / symbol
+            has_model = False
+            model_timeframes = []
+            if symbol_model_dir.exists():
+                for mf in symbol_model_dir.glob("ranknet_*.pt"):
+                    tf = mf.stem.replace("ranknet_", "")
+                    if tf != "model":
+                        model_timeframes.append(tf)
+                    else:
+                        model_timeframes.append("1h")
+                    has_model = True
+
+            if has_model:
+                tf_str = ", ".join(model_timeframes)
+                status_label = QLabel(f"Model Ready ({tf_str})")
+                status_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 11px; font-weight: bold;")
+            else:
+                status_label = QLabel("No Model")
+                status_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; font-style: italic;")
+
+            self._readiness_grid.addWidget(status_label, row, 3)
+            self._signal_rows[symbol] = (signal_label, conf_label, status_label)
+
+    def _update_signal_readiness(self, symbol: str, direction: str, confidence: float):
+        """Update a single row in the signal readiness panel after prediction."""
+        if symbol not in self._signal_rows:
+            return
+
+        signal_label, conf_label, status_label = self._signal_rows[symbol]
+
+        dir_colors = {
+            'UP': COLORS['success'],
+            'DOWN': COLORS['danger'],
+            'NEUTRAL': COLORS['text_secondary'],
+        }
+        dir_arrows = {'UP': '▲ UP', 'DOWN': '▼ DOWN', 'NEUTRAL': '◆ NEUTRAL'}
+        color = dir_colors.get(direction, COLORS['text_secondary'])
+
+        signal_label.setText(dir_arrows.get(direction, direction))
+        signal_label.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: bold;")
+
+        conf_label.setText(f"{confidence * 100:.0f}%")
+        conf_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+
+        status_label.setText("Ready")
+        status_label.setStyleSheet(f"color: {COLORS['success']}; font-size: 11px; font-weight: bold;")
 
     # Public methods for external updates
 
@@ -801,17 +1191,77 @@ class MLPanel(QWidget):
 
     def update_metrics(self, metrics: Dict):
         """Update displayed metrics"""
-        metrics_text = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+        parts = []
+        for k, v in metrics.items():
+            if isinstance(v, (int, float)):
+                parts.append(f"{k}: {v:.4f}")
+            else:
+                parts.append(f"{k}: {v}")
+        metrics_text = " | ".join(parts)
         self.metrics_label.setText(f"Metrics: {metrics_text}")
 
-    def set_training_complete(self, success: bool, message: str):
-        """Handle training completion"""
+    def set_training_complete(self, success: bool, message: str, results: Optional[Dict] = None):
+        """Handle training completion and display ICE metrics"""
         self._training_active = False
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.progress_bar.setValue(100 if success else 0)
         self.progress_status.setText(message)
         self.log_message(f"[TRAINING] {'Completed' if success else 'Failed'}: {message}")
+
+        # Update ICE display if results provided
+        if success and results:
+            self._update_ice_display(results)
+
+    def _update_ice_display(self, results: Dict):
+        """Update the ICE (Information Coefficient) display after training"""
+        # Extract metrics from results
+        avg_ic = results.get('avg_ic', 0)
+        avg_sharpe = results.get('avg_sharpe_ratio', 0)
+        avg_acc = results.get('avg_accuracy', 0)
+
+        # Update IC value
+        self.ic_value_label.setText(f"{avg_ic:.4f}")
+
+        # Color and rate IC
+        if avg_ic > 0.10:
+            ic_color = COLORS['success']
+            ic_rating = "EXCELLENT - Strong predictive signal"
+        elif avg_ic > 0.05:
+            ic_color = COLORS['chart_green']
+            ic_rating = "GOOD - Meaningful predictive power"
+        elif avg_ic > 0.02:
+            ic_color = COLORS['accent']
+            ic_rating = "MODERATE - Some predictive signal"
+        elif avg_ic > 0:
+            ic_color = COLORS['text_secondary']
+            ic_rating = "WEAK - Marginal signal"
+        else:
+            ic_color = COLORS['danger']
+            ic_rating = "NONE - No predictive power"
+
+        self.ic_value_label.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {ic_color};")
+        self.ic_rating_label.setText(ic_rating)
+        self.ic_rating_label.setStyleSheet(f"color: {ic_color};")
+
+        # Update Sharpe
+        self.sharpe_value_label.setText(f"{avg_sharpe:.2f}")
+        sharpe_color = COLORS['success'] if avg_sharpe > 1 else (COLORS['accent'] if avg_sharpe > 0 else COLORS['danger'])
+        self.sharpe_value_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {sharpe_color};")
+
+        # Update Accuracy
+        self.test_acc_label.setText(f"{avg_acc:.1%}")
+        acc_color = COLORS['success'] if avg_acc > 0.55 else (COLORS['accent'] if avg_acc > 0.50 else COLORS['danger'])
+        self.test_acc_label.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {acc_color};")
+
+        # Log detailed ICE info
+        self.log_message(f"\n{'='*60}")
+        self.log_message(f"TRAINING COMPLETE - ICE METRICS")
+        self.log_message(f"{'='*60}")
+        self.log_message(f"  Information Coefficient (IC): {avg_ic:.4f} [{ic_rating.split(' - ')[0]}]")
+        self.log_message(f"  Sharpe Ratio:                 {avg_sharpe:.2f}")
+        self.log_message(f"  Test Accuracy:                {avg_acc:.1%}")
+        self.log_message(f"{'='*60}")
 
     def display_prediction(self, prediction_data: Dict):
         """Display prediction results with trading signals and risk management"""
@@ -937,48 +1387,6 @@ class MLPanel(QWidget):
         self.risk_levels_label.setText(levels_text)
         self.log_message(f"[RISK] Stop: ${stop_loss:.2f}, Target: ${take_profit:.2f}, R/R 1:{risk_reward:.2f}")
 
-    def display_test_results(self, results: Dict):
-        """Display model test results"""
-        # Update metrics labels
-        for key, label in self.test_metrics.items():
-            if key in results:
-                label.setText(f"{results[key]:.4f}")
-
-        colors = get_chart_colors()
-
-        # Clear all axes
-        for ax in [self.test_ax1, self.test_ax2, self.test_ax3, self.test_ax4, self.test_ax5]:
-            ax.clear()
-            ax.set_facecolor(colors['background'])
-            ax.tick_params(colors=colors['text'])
-
-        # Plot actual vs predicted
-        if 'actual' in results and 'predicted' in results:
-            self.test_ax1.plot(results['actual'], label='Actual',
-                              color=colors['positive'], linewidth=1.5)
-            self.test_ax1.plot(results['predicted'], label='Predicted',
-                              color=colors['primary'], linewidth=1.5)
-            self.test_ax1.set_title('Actual vs Predicted', color=colors['text'])
-            self.test_ax1.legend(facecolor=colors['background'], labelcolor=colors['text'])
-            self.test_ax1.grid(True, alpha=0.3, color=colors['grid'])
-
-        # Direction accuracy over time
-        if 'dir_acc_rolling' in results:
-            self.test_ax2.plot(results['dir_acc_rolling'], color=colors['accent'])
-            self.test_ax2.axhline(0.5, linestyle='--', color=colors['grid'], alpha=0.7)
-            self.test_ax2.set_title('Direction Accuracy (Rolling)', color=colors['text'])
-            self.test_ax2.set_ylabel('Accuracy', color=colors['text'])
-            self.test_ax2.grid(True, alpha=0.3, color=colors['grid'])
-
-        # Error distribution
-        if 'errors' in results:
-            self.test_ax3.hist(results['errors'], bins=50, color=colors['primary'], alpha=0.7)
-            self.test_ax3.set_title('Prediction Error Distribution', color=colors['text'])
-            self.test_ax3.set_xlabel('Error', color=colors['text'])
-            self.test_ax3.grid(True, alpha=0.3, color=colors['grid'])
-
-        self.test_figure.tight_layout()
-        self.test_canvas.draw()
 
     def refresh_datasets(self):
         """Refresh available datasets"""

@@ -4,13 +4,20 @@ Inference pipeline for generating predictions with trained TFT model
 
 IMPORTANT: This predictor handles RETURN predictions (target_return)
 and converts them to price predictions using proper denormalization.
+
+Enhanced with:
+- Confidence scoring based on prediction uncertainty
+- Edge calculation for trading decisions
+- Information Coefficient tracking
+- Integration with capital-aware execution
 """
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Tuple, Optional, Dict, List
+from typing import Tuple, Optional, Dict, List, Any
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 
 try:
     import torch
@@ -21,9 +28,87 @@ except ImportError:
 
 from ..models.tft_model import CryptoTFT
 from ..preprocessing.preprocessor import CryptoPreprocessor
+from src.utils.debug_logger import debug_log, get_debug_logger
+from src.ml.training.metrics import information_coefficient
 
 # Default prediction horizon (must match model training)
 PREDICTION_HORIZON = 24
+
+
+@dataclass
+class PredictionResult:
+    """
+    Enhanced prediction result with confidence metrics.
+
+    Provides transparency about prediction quality and uncertainty.
+    """
+    symbol: str
+    timestamp: datetime
+
+    # Price predictions
+    current_price: float
+    predicted_prices: np.ndarray  # Array of predicted prices for each hour
+    median_prediction: float  # Single median value for next period
+
+    # Confidence intervals
+    lower_95: np.ndarray
+    upper_95: np.ndarray
+    lower_80: np.ndarray
+    upper_80: np.ndarray
+
+    # Confidence metrics
+    confidence_score: float  # 0-1 score based on uncertainty
+    prediction_spread: float  # Width of confidence interval
+    volatility: float  # Recent volatility
+
+    # Return-based metrics
+    predicted_return: float  # Expected return (median)
+    predicted_return_range: Tuple[float, float]  # (low, high) return range
+
+    # Edge and IC tracking
+    raw_edge: float  # Raw predicted edge (return)
+    historical_ic: float  # Historical IC for this symbol
+
+    # Timestamps for prediction horizon
+    future_timestamps: List[datetime]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for logging."""
+        return {
+            'symbol': self.symbol,
+            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'current_price': self.current_price,
+            'median_prediction': self.median_prediction,
+            'confidence_score': self.confidence_score,
+            'prediction_spread': self.prediction_spread,
+            'volatility': self.volatility,
+            'predicted_return': self.predicted_return,
+            'predicted_return_range': self.predicted_return_range,
+            'raw_edge': self.raw_edge,
+            'historical_ic': self.historical_ic,
+            'predicted_prices_sample': self.predicted_prices[:5].tolist() if len(self.predicted_prices) > 0 else [],
+        }
+
+    def summary(self) -> str:
+        """Generate human-readable summary."""
+        return f"""
+=== Prediction: {self.symbol} ===
+Time: {self.timestamp}
+Current Price: ${self.current_price:.2f}
+
+Predictions (next {len(self.predicted_prices)} hours):
+  Median: ${self.median_prediction:.2f}
+  Range (95%): ${self.lower_95[0]:.2f} - ${self.upper_95[0]:.2f}
+  Expected Return: {self.predicted_return * 100:.2f}%
+
+Confidence Metrics:
+  Confidence Score: {self.confidence_score:.2f}
+  Prediction Spread: {self.prediction_spread:.2f}%
+  Volatility: {self.volatility:.4f}
+  Historical IC: {self.historical_ic:.4f}
+
+Edge: {self.raw_edge * 100:.3f}%
+"""
 
 
 class CryptoPredictor:
@@ -33,9 +118,11 @@ class CryptoPredictor:
     Features:
     - Load trained model and preprocessor
     - Preprocess recent data
-    - Generate 10-hour predictions
+    - Generate multi-hour predictions
     - Extract confidence intervals
     - Denormalize predictions to actual prices
+    - Calculate confidence scores and edges
+    - Track Information Coefficient
     """
 
     def __init__(
@@ -68,6 +155,10 @@ class CryptoPredictor:
         self.model_path = Path(model_path)
         self.scaler_path = Path(scaler_path)
         self.dataset_dir = Path(dataset_dir)
+
+        # Prediction tracking for IC calculation
+        self.prediction_history: Dict[str, List[Dict]] = {}  # symbol -> list of predictions
+        self.ic_history: Dict[str, List[float]] = {}  # symbol -> list of IC values
 
         # Load model
         self._load_model()
@@ -310,6 +401,13 @@ class CryptoPredictor:
                 current_price=current_price
             )
 
+            # Truncate predictions to requested n_hours
+            # Model may predict more hours than requested (e.g., 24), limit to n_hours
+            for key in list(predictions_denorm.keys()):
+                if key != 'timestamps' and hasattr(predictions_denorm[key], '__len__'):
+                    if len(predictions_denorm[key]) > n_hours:
+                        predictions_denorm[key] = predictions_denorm[key][:n_hours]
+
             # Generate future timestamps
             last_timestamp = preprocessed_data['datetime'].iloc[-1]
             future_timestamps = [
@@ -412,6 +510,299 @@ class CryptoPredictor:
             print(f"[PREDICTOR] [X] Denormalization failed: {e}")
             import traceback
             traceback.print_exc()
+            raise
+
+    def calculate_confidence_score(
+        self,
+        predictions: Dict[str, np.ndarray],
+        volatility: float
+    ) -> Tuple[float, float]:
+        """
+        Calculate confidence score based on prediction uncertainty.
+
+        Higher confidence when:
+        - Narrow confidence intervals
+        - Low volatility
+        - Consistent predictions across quantiles
+
+        Args:
+            predictions: Dictionary with median, lower_95, upper_95, etc.
+            volatility: Current market volatility
+
+        Returns:
+            Tuple of (confidence_score, prediction_spread_pct)
+        """
+        try:
+            median = predictions.get('median', np.array([0]))[0]
+            lower_95 = predictions.get('lower_95', np.array([median]))[0]
+            upper_95 = predictions.get('upper_95', np.array([median]))[0]
+
+            # Calculate spread as percentage of median
+            if median > 0:
+                spread = (upper_95 - lower_95) / median
+            else:
+                spread = abs(upper_95 - lower_95) if upper_95 != lower_95 else 1.0
+
+            spread_pct = spread * 100
+
+            # Confidence decreases with wider spread
+            # Base confidence from spread (narrower = higher confidence)
+            spread_confidence = max(0, 1 - (spread / 0.10))  # 10% spread = 0 confidence
+
+            # Volatility adjustment (higher vol = lower confidence)
+            vol_confidence = max(0, 1 - (volatility / 0.05))  # 5% vol = 0 confidence
+
+            # Combined confidence score
+            confidence = (0.7 * spread_confidence + 0.3 * vol_confidence)
+            confidence = float(np.clip(confidence, 0, 1))
+
+            if self.verbose:
+                print(f"[PREDICTOR]   - Spread: {spread_pct:.2f}%")
+                print(f"[PREDICTOR]   - Spread confidence: {spread_confidence:.2f}")
+                print(f"[PREDICTOR]   - Vol confidence: {vol_confidence:.2f}")
+                print(f"[PREDICTOR]   - Final confidence: {confidence:.2f}")
+
+            return confidence, spread_pct
+
+        except Exception as e:
+            if self.verbose:
+                print(f"[PREDICTOR] [!] Confidence calculation failed: {e}")
+            return 0.5, 0.0
+
+    def calculate_edge(
+        self,
+        predicted_return: float,
+        volatility: float,
+        horizon: int = 24
+    ) -> float:
+        """
+        Calculate trading edge from predicted return.
+
+        Edge is the predicted return adjusted for volatility.
+        Clips extreme predictions to reasonable bounds.
+
+        Args:
+            predicted_return: Predicted return as decimal
+            volatility: Current volatility
+            horizon: Prediction horizon in hours
+
+        Returns:
+            Adjusted edge (clipped to volatility bounds)
+        """
+        import math
+
+        # Maximum reasonable edge based on volatility
+        max_edge = 2.0 * volatility * math.sqrt(horizon)
+
+        # Clip to reasonable range
+        edge = float(np.clip(predicted_return, -max_edge, max_edge))
+
+        if self.verbose:
+            print(f"[PREDICTOR]   - Raw return: {predicted_return * 100:.3f}%")
+            print(f"[PREDICTOR]   - Max edge: {max_edge * 100:.3f}%")
+            print(f"[PREDICTOR]   - Clipped edge: {edge * 100:.3f}%")
+
+        return edge
+
+    def get_historical_ic(self, symbol: str, window: int = 100) -> float:
+        """
+        Get historical Information Coefficient for a symbol.
+
+        Calculates IC from past predictions vs actuals.
+
+        Args:
+            symbol: Trading symbol
+            window: Number of past predictions to use
+
+        Returns:
+            Information Coefficient (Spearman correlation)
+        """
+        if symbol not in self.prediction_history:
+            return 0.0
+
+        history = self.prediction_history[symbol]
+        if len(history) < 10:
+            return 0.0
+
+        # Get last N predictions
+        recent = history[-window:]
+
+        # Extract predicted and actual returns
+        predicted = [h['predicted_return'] for h in recent if 'actual_return' in h]
+        actual = [h['actual_return'] for h in recent if 'actual_return' in h]
+
+        if len(predicted) < 10:
+            return 0.0
+
+        # Calculate IC
+        ic = information_coefficient(np.array(actual), np.array(predicted))
+        return ic
+
+    def record_prediction(
+        self,
+        symbol: str,
+        predicted_return: float,
+        actual_return: Optional[float] = None,
+        timestamp: Optional[datetime] = None
+    ):
+        """
+        Record a prediction for IC tracking.
+
+        Args:
+            symbol: Trading symbol
+            predicted_return: Predicted return
+            actual_return: Actual return (if known, for backfilling)
+            timestamp: Prediction timestamp
+        """
+        if symbol not in self.prediction_history:
+            self.prediction_history[symbol] = []
+
+        record = {
+            'timestamp': timestamp or datetime.now(),
+            'predicted_return': predicted_return,
+        }
+        if actual_return is not None:
+            record['actual_return'] = actual_return
+
+        self.prediction_history[symbol].append(record)
+
+        # Keep last 1000 predictions
+        if len(self.prediction_history[symbol]) > 1000:
+            self.prediction_history[symbol] = self.prediction_history[symbol][-1000:]
+
+    def update_actual_return(self, symbol: str, timestamp: datetime, actual_return: float):
+        """
+        Update a past prediction with the actual return.
+
+        Args:
+            symbol: Trading symbol
+            timestamp: Prediction timestamp to update
+            actual_return: Actual return that occurred
+        """
+        if symbol not in self.prediction_history:
+            return
+
+        for record in self.prediction_history[symbol]:
+            if record['timestamp'] == timestamp:
+                record['actual_return'] = actual_return
+                break
+
+    def predict_with_confidence(
+        self,
+        symbol: str,
+        n_hours: int = 24
+    ) -> PredictionResult:
+        """
+        Generate prediction with full confidence metrics and transparency.
+
+        This is the enhanced prediction method that provides:
+        - Price predictions with confidence intervals
+        - Confidence score based on uncertainty
+        - Edge calculation for trading
+        - Historical IC tracking
+
+        Args:
+            symbol: Cryptocurrency symbol (e.g., 'BTCUSDT')
+            n_hours: Number of hours to predict
+
+        Returns:
+            PredictionResult with full transparency
+        """
+        if self.verbose:
+            print(f"\n[PREDICTOR] Generating enhanced prediction for {symbol}...")
+
+        # Log prediction start
+        debug_log("prediction", "start", {
+            "symbol": symbol,
+            "n_hours": n_hours,
+        }, "info")
+
+        try:
+            # Get base predictions
+            predictions = self.predict(symbol, n_hours=n_hours)
+
+            # Get current price
+            context_length = self.model.config.max_encoder_length
+            recent_data = self.load_recent_data(symbol, n_candles=context_length + 100)
+            preprocessed = self.preprocess(recent_data)
+
+            # Get current price from preprocessor
+            current_price = 0.0
+            if symbol in self.preprocessor.scalers:
+                scaler = self.preprocessor.scalers[symbol]
+                try:
+                    close_idx = self.preprocessor.feature_columns.index('close')
+                    last_close_norm = preprocessed['close'].iloc[-1]
+                    current_price = last_close_norm * scaler.scale_[close_idx] + scaler.mean_[close_idx]
+                except (ValueError, IndexError):
+                    current_price = preprocessed['close'].iloc[-1]
+
+            # Calculate volatility from recent returns
+            if 'return_1h' in preprocessed.columns:
+                recent_returns = preprocessed['return_1h'].tail(50).values
+                volatility = float(np.std(recent_returns)) if len(recent_returns) > 1 else 0.02
+            else:
+                volatility = 0.02  # Default volatility
+
+            # Calculate confidence score
+            confidence, spread_pct = self.calculate_confidence_score(predictions, volatility)
+
+            # Calculate predicted return
+            median_pred = predictions['median'][0] if len(predictions['median']) > 0 else current_price
+            predicted_return = (median_pred - current_price) / current_price if current_price > 0 else 0
+
+            # Calculate return range
+            lower_pred = predictions.get('lower_95', predictions['median'])[0]
+            upper_pred = predictions.get('upper_95', predictions['median'])[0]
+            return_low = (lower_pred - current_price) / current_price if current_price > 0 else 0
+            return_high = (upper_pred - current_price) / current_price if current_price > 0 else 0
+
+            # Calculate edge
+            edge = self.calculate_edge(predicted_return, volatility, n_hours)
+
+            # Get historical IC
+            historical_ic = self.get_historical_ic(symbol)
+
+            # Record this prediction
+            self.record_prediction(symbol, predicted_return, timestamp=datetime.now())
+
+            # Create result
+            result = PredictionResult(
+                symbol=symbol,
+                timestamp=datetime.now(),
+                current_price=current_price,
+                predicted_prices=predictions['median'],
+                median_prediction=median_pred,
+                lower_95=predictions.get('lower_95', predictions['median']),
+                upper_95=predictions.get('upper_95', predictions['median']),
+                lower_80=predictions.get('lower_80', predictions['median']),
+                upper_80=predictions.get('upper_80', predictions['median']),
+                confidence_score=confidence,
+                prediction_spread=spread_pct,
+                volatility=volatility,
+                predicted_return=predicted_return,
+                predicted_return_range=(return_low, return_high),
+                raw_edge=edge,
+                historical_ic=historical_ic,
+                future_timestamps=predictions.get('timestamps', []),
+            )
+
+            # Log success
+            debug_log("prediction", "complete", result.to_dict(), "success")
+
+            if self.verbose:
+                print(f"\n[PREDICTOR] Prediction Summary:")
+                print(f"[PREDICTOR]   - Current: ${current_price:.2f}")
+                print(f"[PREDICTOR]   - Median: ${median_pred:.2f}")
+                print(f"[PREDICTOR]   - Return: {predicted_return * 100:.2f}%")
+                print(f"[PREDICTOR]   - Confidence: {confidence:.2f}")
+                print(f"[PREDICTOR]   - Edge: {edge * 100:.3f}%")
+                print(f"[PREDICTOR]   - Historical IC: {historical_ic:.4f}")
+
+            return result
+
+        except Exception as e:
+            debug_log("prediction", "error", {"error": str(e)}, "error")
             raise
 
     def predict_multiple(

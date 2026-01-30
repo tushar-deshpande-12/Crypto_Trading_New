@@ -1,0 +1,35 @@
+{
+  "symbol": "BARUSDT",
+  "candle_count": 41822,
+  "interval": "1h",
+  "fetch_timestamp": "2026-01-30T00:47:18.445662",
+  "date_range": {
+    "start": "2021-04-23T01:30:00",
+    "end": "2026-01-30T00:30:00",
+    "start_timestamp": 1619121600000,
+    "end_timestamp": 1769713200000
+  },
+  "data_points": 41822,
+  "files": [
+    "metadata.json",
+    "data.csv",
+    "data.json"
+  ],
+  "user_metadata": {
+    "symbol": "BARUSDT",
+    "interval": "1h",
+    "max_candles_requested": 50000,
+    "actual_candles_fetched": 41822,
+    "fetch_timestamp": "2026-01-30T00:47:18.444621",
+    "features_computed": true,
+    "target_column": "direction",
+    "features": [
+      "rsi",
+      "macd",
+      "volatility_20",
+      "bb_position",
+      "return_1h",
+      "volume_ratio"
+    ]
+  }
+}

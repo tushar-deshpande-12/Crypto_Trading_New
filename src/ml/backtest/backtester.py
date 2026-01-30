@@ -13,10 +13,17 @@ Supports both:
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional, Union, TYPE_CHECKING
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import matplotlib.pyplot as plt
 from pathlib import Path
 from src.ml.training.model_evaluator import safe_direction_accuracy
+from src.ml.training.metrics import (
+    information_coefficient,
+    sharpe_ratio,
+    sortino_ratio,
+    max_drawdown,
+    calmar_ratio,
+)
 
 if TYPE_CHECKING:
     from src.ml.strategies.base import BaseStrategy, TradeSignal
@@ -66,14 +73,23 @@ class BacktestResults:
     prediction_r2: float
     direction_accuracy: float
 
+    # NEW: Risk-adjusted metrics (ICE and Sharpe focus)
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    information_coefficient: float = 0.0
+    max_drawdown: float = 0.0
+    max_drawdown_pct: float = 0.0
+    calmar_ratio: float = 0.0
+    volatility: float = 0.0
+
     # Trade history
-    trades: List[Trade]
-    equity_curve: pd.Series
+    trades: List[Trade] = field(default_factory=list)
+    equity_curve: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
 
     # Buy and hold comparison
-    buy_hold_return: float
-    buy_hold_return_pct: float
-    excess_return: float
+    buy_hold_return: float = 0.0
+    buy_hold_return_pct: float = 0.0
+    excess_return: float = 0.0
 
 
 class CryptoBacktester:
@@ -565,7 +581,7 @@ class CryptoBacktester:
         final_value: float,
         buy_hold_final: float
     ) -> BacktestResults:
-        """Calculate all backtest metrics"""
+        """Calculate all backtest metrics including ICE and Sharpe ratio"""
 
         # Portfolio performance
         total_return = final_value - initial_capital
@@ -617,10 +633,54 @@ class CryptoBacktester:
         r2 = 1 - (ss_res / (ss_tot + 1e-8))
 
         # Direction accuracy (using safe calculation to prevent NaN)
-        direction_accuracy = safe_direction_accuracy(predictions, actual_prices)
+        dir_acc = safe_direction_accuracy(predictions, actual_prices)
 
         # Equity curve
         equity_curve = pd.Series(equity_values, index=timestamps)
+        equity_array = np.array(equity_values)
+
+        # ===== NEW: ICE and Sharpe Ratio Calculations =====
+
+        # Calculate returns from equity curve
+        if len(equity_array) > 1:
+            returns = np.diff(equity_array) / equity_array[:-1]
+            returns = returns[np.isfinite(returns)]
+        else:
+            returns = np.array([0.0])
+
+        # Information Coefficient (correlation between predictions and actuals)
+        # Using returns rather than prices for better IC interpretation
+        if len(predictions) > 2 and len(actual_prices) > 2:
+            pred_returns = np.diff(predictions) / predictions[:-1]
+            actual_returns = np.diff(actual_prices) / actual_prices[:-1]
+            ic = information_coefficient(actual_returns, pred_returns)
+        else:
+            ic = 0.0
+
+        # Sharpe Ratio (risk-adjusted return)
+        sharpe = sharpe_ratio(returns, risk_free_rate=0.0, periods_per_year=8760)
+
+        # Sortino Ratio (downside risk-adjusted return)
+        sortino = sortino_ratio(returns, risk_free_rate=0.0, periods_per_year=8760)
+
+        # Maximum Drawdown
+        max_dd, _, _ = max_drawdown(equity_array)
+        max_dd_pct = max_dd * 100
+
+        # Calmar Ratio (return / max drawdown)
+        calmar = calmar_ratio(returns, equity_array, periods_per_year=8760)
+
+        # Volatility (annualized)
+        volatility = np.std(returns, ddof=1) * np.sqrt(8760) if len(returns) > 1 else 0.0
+
+        if self.verbose:
+            print(f"\n[BACKTEST] Risk-Adjusted Metrics:")
+            print(f"[BACKTEST]   - Information Coefficient (IC): {ic:.4f}")
+            print(f"[BACKTEST]   - Sharpe Ratio: {sharpe:.4f}")
+            print(f"[BACKTEST]   - Sortino Ratio: {sortino:.4f}")
+            print(f"[BACKTEST]   - Max Drawdown: {max_dd_pct:.2f}%")
+            print(f"[BACKTEST]   - Calmar Ratio: {calmar:.4f}")
+            print(f"[BACKTEST]   - Annualized Volatility: {volatility * 100:.2f}%")
 
         return BacktestResults(
             initial_capital=initial_capital,
@@ -635,7 +695,16 @@ class CryptoBacktester:
             prediction_mae=mae,
             prediction_rmse=rmse,
             prediction_r2=r2,
-            direction_accuracy=direction_accuracy,
+            direction_accuracy=dir_acc,
+            # NEW: Risk-adjusted metrics
+            sharpe_ratio=sharpe,
+            sortino_ratio=sortino,
+            information_coefficient=ic,
+            max_drawdown=max_dd,
+            max_drawdown_pct=max_dd_pct,
+            calmar_ratio=calmar,
+            volatility=volatility,
+            # Trade history
             trades=trades,
             equity_curve=equity_curve,
             buy_hold_return=buy_hold_return,
@@ -665,6 +734,61 @@ class CryptoBacktester:
         print(f"  Losing Trades:      {results.num_losses}")
         print(f"  Win Rate:           {results.win_rate:.2f}%")
         print(f"  Profit/Loss Ratio:  {results.profit_loss_ratio:.2f}")
+
+        print(f"\nRISK-ADJUSTED METRICS (ICE & SHARPE FOCUS):")
+        print(f"  Information Coef:   {results.information_coefficient:.4f}")
+        print(f"  Sharpe Ratio:       {results.sharpe_ratio:.4f}")
+        print(f"  Sortino Ratio:      {results.sortino_ratio:.4f}")
+        print(f"  Max Drawdown:       {results.max_drawdown_pct:.2f}%")
+        print(f"  Calmar Ratio:       {results.calmar_ratio:.4f}")
+        print(f"  Volatility (Ann.):  {results.volatility * 100:.2f}%")
+
+        # Interpret ICE with detailed ratings
+        ic = results.information_coefficient
+        if ic > 0.15:
+            ic_rating = "EXCELLENT"
+            ic_desc = "IC > 0.15: Exceptional predictive power (rare)"
+        elif ic > 0.10:
+            ic_rating = "STRONG"
+            ic_desc = "IC > 0.10: Strong predictive power"
+        elif ic > 0.05:
+            ic_rating = "GOOD"
+            ic_desc = "IC > 0.05: Meaningful predictive power"
+        elif ic > 0.02:
+            ic_rating = "MODERATE"
+            ic_desc = "IC > 0.02: Some predictive signal"
+        elif ic > 0:
+            ic_rating = "WEAK"
+            ic_desc = "IC > 0.00: Marginal predictive power"
+        elif ic > -0.02:
+            ic_rating = "NONE"
+            ic_desc = "IC ~ 0.00: No predictive power"
+        else:
+            ic_rating = "INVERSE"
+            ic_desc = "IC < -0.02: Predictions inversely correlated (bad)"
+        print(f"  IC Rating:          {ic_rating} ({ic_desc})")
+
+        # Interpret Sharpe with detailed ratings
+        sharpe = results.sharpe_ratio
+        if sharpe > 3:
+            sharpe_rating = "EXCEPTIONAL"
+            sharpe_desc = "Sharpe > 3: Outstanding (check for overfitting)"
+        elif sharpe > 2:
+            sharpe_rating = "EXCELLENT"
+            sharpe_desc = "Sharpe > 2: Very good risk-adjusted returns"
+        elif sharpe > 1:
+            sharpe_rating = "GOOD"
+            sharpe_desc = "Sharpe > 1: Good risk-adjusted returns"
+        elif sharpe > 0.5:
+            sharpe_rating = "ACCEPTABLE"
+            sharpe_desc = "Sharpe > 0.5: Acceptable but could improve"
+        elif sharpe > 0:
+            sharpe_rating = "MARGINAL"
+            sharpe_desc = "Sharpe > 0: Positive but suboptimal"
+        else:
+            sharpe_rating = "POOR"
+            sharpe_desc = "Sharpe < 0: Negative risk-adjusted returns"
+        print(f"  Sharpe Rating:      {sharpe_rating} ({sharpe_desc})")
 
         print(f"\nPREDICTION ACCURACY:")
         print(f"  MAE:                {results.prediction_mae:.4f}")
@@ -801,6 +925,311 @@ class CryptoBacktester:
                     print(f"[BACKTEST] Failed to save plot: {e2}")
 
         return fig
+
+
+@dataclass
+class WalkForwardResults:
+    """Results from walk-forward backtesting"""
+    num_folds: int
+    fold_results: List[BacktestResults]
+
+    # Aggregated metrics
+    avg_sharpe_ratio: float
+    avg_sortino_ratio: float
+    avg_information_coefficient: float
+    avg_total_return_pct: float
+    avg_win_rate: float
+    avg_direction_accuracy: float
+    avg_max_drawdown_pct: float
+
+    # Stability metrics
+    sharpe_std: float
+    ic_std: float
+    return_std: float
+
+    # Overall performance
+    cumulative_return_pct: float
+    worst_fold_return_pct: float
+    best_fold_return_pct: float
+
+
+class WalkForwardBacktester:
+    """
+    Walk-Forward Backtesting for realistic model evaluation.
+
+    Walk-forward testing simulates real trading by:
+    1. Training on historical data up to time T
+    2. Testing on T to T+N (out-of-sample)
+    3. Moving forward and retraining periodically
+
+    This provides more realistic performance estimates than
+    a single train/test split.
+    """
+
+    def __init__(
+        self,
+        n_folds: int = 5,
+        train_ratio: float = 0.7,
+        gap_periods: int = 24,  # Gap between train and test to avoid leakage
+        retrain_every: int = None,  # Periods between retraining (None = per fold)
+        verbose: bool = True
+    ):
+        """
+        Initialize walk-forward backtester.
+
+        Args:
+            n_folds: Number of walk-forward folds
+            train_ratio: Ratio of each fold used for training
+            gap_periods: Gap between train/test to avoid leakage (hours)
+            retrain_every: Retrain model every N periods (None = each fold)
+            verbose: Print progress
+        """
+        self.n_folds = n_folds
+        self.train_ratio = train_ratio
+        self.gap_periods = gap_periods
+        self.retrain_every = retrain_every
+        self.verbose = verbose
+
+        if self.verbose:
+            print(f"\n[WALK-FORWARD] Initializing Walk-Forward Backtester")
+            print(f"[WALK-FORWARD]   - Folds: {n_folds}")
+            print(f"[WALK-FORWARD]   - Train ratio: {train_ratio:.1%}")
+            print(f"[WALK-FORWARD]   - Gap periods: {gap_periods}")
+
+    def run_walk_forward(
+        self,
+        data: pd.DataFrame,
+        model_factory,
+        feature_columns: List[str],
+        target_column: str = 'target_return',
+        sequence_length: int = 168,
+        backtest_config: Optional[BacktestConfig] = None
+    ) -> WalkForwardResults:
+        """
+        Run walk-forward backtesting.
+
+        Args:
+            data: Full DataFrame with features and target
+            model_factory: Callable that creates and trains a model
+                          Signature: model_factory(train_data) -> trained_model
+            feature_columns: List of feature column names
+            target_column: Target column name
+            sequence_length: Sequence length for model
+            backtest_config: Backtest configuration
+
+        Returns:
+            WalkForwardResults with all fold results and aggregated metrics
+        """
+        if self.verbose:
+            print(f"\n[WALK-FORWARD] Starting walk-forward backtest...")
+            print(f"[WALK-FORWARD]   - Total samples: {len(data)}")
+            print(f"[WALK-FORWARD]   - Features: {len(feature_columns)}")
+
+        # Calculate fold sizes
+        total_samples = len(data)
+        fold_size = total_samples // self.n_folds
+
+        if fold_size < sequence_length * 3:
+            raise ValueError(f"Insufficient data for {self.n_folds} folds. "
+                           f"Fold size {fold_size} < min required {sequence_length * 3}")
+
+        fold_results = []
+        backtester = CryptoBacktester(config=backtest_config or BacktestConfig(), verbose=False)
+
+        for fold_idx in range(self.n_folds):
+            if self.verbose:
+                print(f"\n[WALK-FORWARD] === Fold {fold_idx + 1}/{self.n_folds} ===")
+
+            # Calculate indices for this fold
+            # Expanding window: train on all data up to test start
+            test_start = (fold_idx + 1) * fold_size
+            test_end = min(test_start + fold_size, total_samples)
+            train_end = test_start - self.gap_periods
+
+            if train_end < sequence_length * 2:
+                if self.verbose:
+                    print(f"[WALK-FORWARD] Skipping fold {fold_idx + 1}: insufficient training data")
+                continue
+
+            # Split data
+            train_data = data.iloc[:train_end].copy()
+            test_data = data.iloc[test_start:test_end].copy()
+
+            if self.verbose:
+                print(f"[WALK-FORWARD]   - Train: 0 to {train_end} ({len(train_data)} samples)")
+                print(f"[WALK-FORWARD]   - Test: {test_start} to {test_end} ({len(test_data)} samples)")
+
+            try:
+                # Train model on this fold's training data
+                model = model_factory(train_data)
+
+                # Generate predictions on test data
+                predictions = self._predict_with_model(
+                    model, test_data, feature_columns, sequence_length
+                )
+
+                # Get actuals and prices
+                actuals = test_data[target_column].values[sequence_length:]
+
+                if 'close' in test_data.columns:
+                    prices = test_data['close'].values[sequence_length:]
+                else:
+                    prices = np.ones(len(actuals)) * 100
+
+                if 'datetime' in test_data.columns:
+                    timestamps = test_data['datetime'].iloc[sequence_length:].reset_index(drop=True)
+                else:
+                    timestamps = pd.date_range(start='2024-01-01', periods=len(actuals), freq='h')
+
+                # Truncate to match prediction length
+                min_len = min(len(predictions), len(actuals), len(prices))
+                predictions = predictions[:min_len]
+                actuals = actuals[:min_len]
+                prices = prices[:min_len]
+                timestamps = timestamps[:min_len]
+
+                # Run backtest for this fold
+                if len(predictions) > 10:
+                    fold_result = backtester.run_backtest_from_returns(
+                        predicted_returns=predictions,
+                        actual_returns=actuals,
+                        current_prices=prices,
+                        timestamps=timestamps,
+                        denormalize=False  # Already in return space
+                    )
+                    fold_results.append(fold_result)
+
+                    if self.verbose:
+                        print(f"[WALK-FORWARD]   - Sharpe: {fold_result.sharpe_ratio:.4f}")
+                        print(f"[WALK-FORWARD]   - IC: {fold_result.information_coefficient:.4f}")
+                        print(f"[WALK-FORWARD]   - Return: {fold_result.total_return_pct:.2f}%")
+
+            except Exception as e:
+                if self.verbose:
+                    print(f"[WALK-FORWARD] Error in fold {fold_idx + 1}: {e}")
+                continue
+
+        if not fold_results:
+            raise ValueError("No successful folds completed")
+
+        # Aggregate results
+        results = self._aggregate_results(fold_results)
+
+        if self.verbose:
+            self._print_summary(results)
+
+        return results
+
+    def _predict_with_model(
+        self,
+        model,
+        data: pd.DataFrame,
+        feature_columns: List[str],
+        sequence_length: int
+    ) -> np.ndarray:
+        """Generate predictions using the model."""
+        import torch
+
+        features = data[feature_columns].values.astype(np.float32)
+        predictions = []
+
+        model.eval()
+        with torch.no_grad():
+            for i in range(sequence_length, len(features)):
+                seq = features[i - sequence_length:i]
+                seq_tensor = torch.FloatTensor(seq).unsqueeze(0)
+
+                # Handle both classification and regression outputs
+                output = model(seq_tensor)
+                if isinstance(output, tuple):
+                    # Classification model: (class_logits, regression_out)
+                    _, reg_out = output
+                    predictions.append(reg_out.numpy().flatten()[0])
+                else:
+                    predictions.append(output.numpy().flatten()[0])
+
+        return np.array(predictions)
+
+    def _aggregate_results(self, fold_results: List[BacktestResults]) -> WalkForwardResults:
+        """Aggregate results across all folds."""
+        sharpes = [r.sharpe_ratio for r in fold_results]
+        sortinos = [r.sortino_ratio for r in fold_results]
+        ics = [r.information_coefficient for r in fold_results]
+        returns = [r.total_return_pct for r in fold_results]
+        win_rates = [r.win_rate for r in fold_results]
+        dir_accs = [r.direction_accuracy for r in fold_results]
+        drawdowns = [r.max_drawdown_pct for r in fold_results]
+
+        # Calculate cumulative return (compounding)
+        cumulative = 1.0
+        for r in returns:
+            cumulative *= (1 + r / 100)
+        cumulative_return_pct = (cumulative - 1) * 100
+
+        return WalkForwardResults(
+            num_folds=len(fold_results),
+            fold_results=fold_results,
+            avg_sharpe_ratio=np.mean(sharpes),
+            avg_sortino_ratio=np.mean(sortinos),
+            avg_information_coefficient=np.mean(ics),
+            avg_total_return_pct=np.mean(returns),
+            avg_win_rate=np.mean(win_rates),
+            avg_direction_accuracy=np.mean(dir_accs),
+            avg_max_drawdown_pct=np.mean(drawdowns),
+            sharpe_std=np.std(sharpes),
+            ic_std=np.std(ics),
+            return_std=np.std(returns),
+            cumulative_return_pct=cumulative_return_pct,
+            worst_fold_return_pct=min(returns),
+            best_fold_return_pct=max(returns)
+        )
+
+    def _print_summary(self, results: WalkForwardResults):
+        """Print walk-forward summary."""
+        print(f"\n{'='*80}")
+        print(f"WALK-FORWARD BACKTEST RESULTS ({results.num_folds} folds)")
+        print(f"{'='*80}")
+
+        print(f"\nRISK-ADJUSTED METRICS (avg +/- std):")
+        print(f"  Sharpe Ratio:      {results.avg_sharpe_ratio:+.4f} +/- {results.sharpe_std:.4f}")
+        print(f"  Sortino Ratio:     {results.avg_sortino_ratio:+.4f}")
+        print(f"  Information Coef:  {results.avg_information_coefficient:+.4f} +/- {results.ic_std:.4f}")
+
+        print(f"\nRETURN METRICS:")
+        print(f"  Avg Fold Return:   {results.avg_total_return_pct:+.2f}% +/- {results.return_std:.2f}%")
+        print(f"  Cumulative Return: {results.cumulative_return_pct:+.2f}%")
+        print(f"  Best Fold:         {results.best_fold_return_pct:+.2f}%")
+        print(f"  Worst Fold:        {results.worst_fold_return_pct:+.2f}%")
+
+        print(f"\nTRADING METRICS:")
+        print(f"  Avg Win Rate:      {results.avg_win_rate:.1f}%")
+        print(f"  Avg Direction Acc: {results.avg_direction_accuracy:.1f}%")
+        print(f"  Avg Max Drawdown:  {results.avg_max_drawdown_pct:.2f}%")
+
+        # Stability assessment
+        sharpe_cv = results.sharpe_std / (abs(results.avg_sharpe_ratio) + 1e-8)
+        if sharpe_cv < 0.5:
+            stability = "STABLE"
+        elif sharpe_cv < 1.0:
+            stability = "MODERATE"
+        else:
+            stability = "UNSTABLE"
+
+        print(f"\nSTABILITY ASSESSMENT:")
+        print(f"  Sharpe CV:         {sharpe_cv:.2f} ({stability})")
+
+        # Overall rating
+        if results.avg_sharpe_ratio > 1.0 and results.avg_information_coefficient > 0.05:
+            rating = "EXCELLENT - Ready for paper trading"
+        elif results.avg_sharpe_ratio > 0.5 and results.avg_information_coefficient > 0.02:
+            rating = "GOOD - Consider further optimization"
+        elif results.avg_sharpe_ratio > 0:
+            rating = "MARGINAL - Needs improvement"
+        else:
+            rating = "POOR - Do not deploy"
+
+        print(f"  Overall Rating:    {rating}")
+        print(f"{'='*80}")
 
 
 if __name__ == "__main__":

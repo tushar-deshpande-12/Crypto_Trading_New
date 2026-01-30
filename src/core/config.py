@@ -58,12 +58,15 @@ class AppConfig:
     PRODUCTION_MODEL_DIR: str = "models/production"
     EXPERIMENTS_DIR: str = "models/experiments"
 
-    # ML Training Defaults
+    # ML Training Defaults (aligned with ver11_gpt RankNet hyperparameters)
+    ML_DEFAULT_HIDDEN_SIZE: int = 128
+    ML_DEFAULT_NUM_LAYERS: int = 3
+    ML_DEFAULT_DROPOUT: float = 0.1
     ML_DEFAULT_BATCH_SIZE: int = 32
-    ML_DEFAULT_EPOCHS: int = 100
+    ML_DEFAULT_EPOCHS: int = 20
     ML_DEFAULT_LR: float = 0.001
     ML_CONTEXT_LENGTH: int = 40000  # 40k hours of history
-    ML_PREDICTION_HORIZON: int = 10  # 10 hours ahead
+    ML_PREDICTION_HORIZON: int = 30  # 30 candles ahead
     ML_TRAIN_SPLIT: float = 0.70
     ML_VAL_SPLIT: float = 0.15
     ML_TEST_SPLIT: float = 0.15
