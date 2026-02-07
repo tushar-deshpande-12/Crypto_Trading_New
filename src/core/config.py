@@ -15,11 +15,28 @@ class AppConfig:
     APP_NAME: str = "Crypto AI Predictor"
     VERSION: str = "3.0.0"
 
+    # Market Type Configuration
+    MARKET_TYPE: str = "crypto"  # "crypto" or "stocks"
+    SUPPORTED_MARKETS: tuple = ("crypto", "stocks")
+
+    # Crypto-specific settings
+    CRYPTO_INTERVALS: tuple = ("1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w")
+    QUOTE_ASSET: str = "USDT"
+
+    # Stock-specific settings (NSE India)
+    STOCK_INTERVALS: tuple = ("1d", "1wk", "1mo")
+    STOCK_CURRENCY: str = "INR"
+    NSE_MARKET_OPEN: str = "09:15"  # IST
+    NSE_MARKET_CLOSE: str = "15:30"  # IST
+
     # Data Configuration
     DATASET_DIR: str = "dataset"
+    STOCK_DATASET_DIR: str = "dataset/stocks"
     DEFAULT_INTERVAL: str = "1h"
-    DEFAULT_MAX_CANDLES: int = 10000
-    QUOTE_ASSET: str = "USDT"
+    DEFAULT_STOCK_INTERVAL: str = "1d"
+    DEFAULT_MAX_CANDLES: int = 50000
+    DEFAULT_STOCK_MAX_CANDLES: int = 2000  # ~2 years of daily data
+    MULTI_TIMEFRAMES: tuple = ("5m", "15m", "30m", "1h", "4h")
 
     # API Configuration
     BINANCE_BASE_URL: str = "https://api.binance.com/api/v3"

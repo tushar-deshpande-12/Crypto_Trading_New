@@ -45,6 +45,36 @@ class MarketDataWorker(QThread):
             self.finished.emit()
 
 
+class StockMarketDataWorker(QThread):
+    """
+    Worker for fetching market data from NSE India API.
+
+    Emits:
+        result: List of stock market data dicts
+        error: Error message string
+        finished: When work completes
+    """
+    result = pyqtSignal(list)
+    error = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, api_client):
+        super().__init__()
+        self.api_client = api_client
+
+    def run(self):
+        try:
+            data = self.api_client.get_inr_pairs_detailed()
+            if data:
+                self.result.emit(data)
+            else:
+                self.error.emit("Failed to fetch NSE stock market data")
+        except Exception as e:
+            self.error.emit(f"NSE API Error: {str(e)}")
+        finally:
+            self.finished.emit()
+
+
 class ChartDataWorker(QThread):
     """
     Worker for fetching chart/candlestick data.
@@ -237,7 +267,9 @@ class CCXTChartWorker(QThread):
 
 class DataFetchWorker(QThread):
     """
-    Worker for downloading historical data.
+    Worker for downloading historical data across multiple timeframes.
+
+    Downloads 50K candles for each timeframe (5m, 15m, 30m, 1h, 4h) by default.
 
     Emits:
         progress: (current, total, message) during download
@@ -260,29 +292,75 @@ class DataFetchWorker(QThread):
 
     def run(self):
         try:
-            self.progress.emit(0, 100, f"Starting download for {self.symbol}...")
+            from src.core.config import AppConfig
+            timeframes = list(AppConfig.MULTI_TIMEFRAMES)
+            total_tf = len(timeframes)
+            tf_results = {}
 
-            def progress_callback(current, total, message):
-                if not self._stopped:
-                    self.progress.emit(current, total, message)
+            self.progress.emit(0, 100, f"Fetching {self.symbol} across {total_tf} timeframes ({', '.join(timeframes)})...")
 
-            result = self.data_manager.fetch_and_save(
-                symbol=self.symbol,
-                max_candles=self.max_candles,
-                progress_callback=progress_callback
-            )
+            for tf_idx, tf in enumerate(timeframes):
+                if self._stopped:
+                    break
 
-            if result:
+                base_pct = int((tf_idx / total_tf) * 100)
+                tf_pct_range = int(100 / total_tf)
+
+                self.progress.emit(base_pct, 100, f"[{tf_idx+1}/{total_tf}] Fetching {self.symbol} @ {tf} ({self.max_candles:,} candles)...")
+
+                # Switch fetcher to this timeframe
+                self.data_manager.fetcher.interval = tf
+                original_interval = self.data_manager.interval
+                self.data_manager.interval = tf
+
+                try:
+                    def tf_progress(current, total, message):
+                        if not self._stopped:
+                            # Scale progress within this timeframe's slice
+                            if total > 0:
+                                sub_pct = int((current / total) * tf_pct_range)
+                            else:
+                                sub_pct = 0
+                            self.progress.emit(base_pct + sub_pct, 100, f"[{tf}] {message}")
+
+                    path = self.data_manager.fetch_and_save(
+                        symbol=self.symbol,
+                        max_candles=self.max_candles,
+                        progress_callback=tf_progress,
+                        metadata={'interval': tf, 'timeframe': tf}
+                    )
+                    tf_results[tf] = 'OK' if path else 'FAILED'
+                except Exception as e:
+                    tf_results[tf] = f'ERROR: {e}'
+                finally:
+                    self.data_manager.interval = original_interval
+                    self.data_manager.fetcher.interval = original_interval
+
+            if self._stopped:
+                self.result.emit({
+                    'success': False,
+                    'symbol': self.symbol,
+                    'message': f"Download stopped by user"
+                })
+                return
+
+            # Build summary
+            succeeded = sum(1 for v in tf_results.values() if v == 'OK')
+            failed = total_tf - succeeded
+            tf_summary = ', '.join(f"{tf}:{status}" for tf, status in tf_results.items())
+
+            if succeeded > 0:
+                self.progress.emit(100, 100, f"Done! {succeeded}/{total_tf} timeframes saved")
                 self.result.emit({
                     'success': True,
                     'symbol': self.symbol,
-                    'message': f"Downloaded {self.max_candles} candles for {self.symbol}"
+                    'message': f"Downloaded {self.max_candles:,} candles x {succeeded} timeframes for {self.symbol} [{tf_summary}]"
                 })
             else:
                 self.result.emit({
                     'success': False,
                     'symbol': self.symbol,
-                    'message': f"Failed to download data for {self.symbol}"
+                    'message': f"Failed all timeframes for {self.symbol} [{tf_summary}]"
                 })
 
         except Exception as e:

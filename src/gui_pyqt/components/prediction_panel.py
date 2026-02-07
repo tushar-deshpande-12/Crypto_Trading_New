@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
     QPushButton, QFrame, QGroupBox, QGridLayout, QProgressBar,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter,
-    QTextEdit, QSpinBox
+    QTextEdit, QSpinBox, QScrollArea
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from PyQt6.QtGui import QColor, QFont
@@ -87,6 +87,16 @@ class PredictionResult:
     ranknet_confidence: float = 0.0
     ranknet_metrics: Optional[Dict] = None
     ranknet_model_missing: bool = False  # True if no trained model for timeframe
+
+
+@dataclass
+class MultiTFResult:
+    """Result from multi-timeframe RankNet analysis."""
+    symbol: str
+    timeframe_results: Dict[str, Dict]  # tf -> {direction, confidence, metrics, model_source, status, error_msg}
+    consensus_direction: str  # UP/DOWN/NEUTRAL based on majority
+    agreement_score: float  # 0.0-1.0, fraction of TFs agreeing with consensus
+    analysis_time: str
 
 
 class PredictionWorker(QThread):
@@ -718,6 +728,182 @@ class PredictionWorker(QThread):
         self._stopped = True
 
 
+class MultiTFWorker(QThread):
+    """Worker for multi-timeframe RankNet analysis.
+
+    For each timeframe (5m, 15m, 30m, 1h, 4h):
+    1. Downloads 50K candles via CCXT
+    2. Checks for existing RankNet model, trains if missing
+    3. Runs prediction and collects metrics
+    """
+    progress = pyqtSignal(int, int, str)
+    result = pyqtSignal(object)  # MultiTFResult
+    error = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, symbol: str):
+        super().__init__()
+        self.symbol = symbol
+        self._stopped = False
+
+    def run(self):
+        try:
+            from pathlib import Path
+            from collections import Counter
+            from src.core.config import AppConfig
+            from src.api.ccxt_client import get_ccxt_client
+            from src.ml.models.ranknet_model import RankNetPredictor
+
+            timeframes = list(AppConfig.MULTI_TIMEFRAMES)
+            total_tf = len(timeframes)
+            results = {}
+
+            client = get_ccxt_client('binance')
+            ccxt_symbol = client.convert_symbol_format(self.symbol, to_ccxt=True)
+
+            total_steps = total_tf * 3  # 3 phases per TF
+
+            for tf_idx, tf in enumerate(timeframes):
+                if self._stopped:
+                    return
+
+                tf_result = {
+                    'direction': '--', 'confidence': 0.0, 'metrics': {},
+                    'model_source': 'none', 'data_source': 'none',
+                    'status': 'skipped', 'error_msg': None,
+                }
+
+                step_base = tf_idx * 3
+
+                # Phase 1: Download data
+                self.progress.emit(step_base, total_steps,
+                    f"[{tf_idx+1}/{total_tf}] {tf}: Downloading data...")
+                try:
+                    df = client.get_max_ohlcv(ccxt_symbol, tf, max_candles=50000)
+                    if df is None or len(df) < 500:
+                        row_count = len(df) if df is not None else 0
+                        tf_result['status'] = 'error'
+                        tf_result['error_msg'] = f"Insufficient data ({row_count} rows)"
+                        results[tf] = tf_result
+                        continue
+                    ohlcv_df = df[['open', 'high', 'low', 'close', 'volume']].copy()
+                    tf_result['data_source'] = 'downloaded'
+                except Exception as e:
+                    tf_result['status'] = 'error'
+                    tf_result['error_msg'] = f"Data fetch failed: {str(e)}"
+                    results[tf] = tf_result
+                    continue
+
+                if self._stopped:
+                    return
+
+                # Phase 2: Load or train model
+                self.progress.emit(step_base + 1, total_steps,
+                    f"[{tf_idx+1}/{total_tf}] {tf}: Checking model...")
+
+                predictor = None
+                try:
+                    path1 = Path(f"models/checkpoints/{self.symbol}/ranknet_{tf}.pt")
+                    path2 = Path(f"lightning_logs/models/checkpoints/{self.symbol}/ranknet_{tf}.pt")
+
+                    if path1.exists():
+                        predictor = RankNetPredictor.load(str(path1))
+                        tf_result['model_source'] = 'loaded'
+                        print(f"[MultiTF] {self.symbol}@{tf}: Loaded model from {path1}")
+                    elif path2.exists():
+                        predictor = RankNetPredictor.load(str(path2))
+                        tf_result['model_source'] = 'loaded'
+                        print(f"[MultiTF] {self.symbol}@{tf}: Loaded model from {path2}")
+                    else:
+                        # Train new model
+                        self.progress.emit(step_base + 1, total_steps,
+                            f"[{tf_idx+1}/{total_tf}] {tf}: Training RankNet (no saved model)...")
+                        print(f"[MultiTF] {self.symbol}@{tf}: No model found, training...")
+
+                        predictor = RankNetPredictor(
+                            hidden_dim=128, num_blocks=3, dropout=0.1,
+                            epochs=20, lr=0.001, future_horizon=30,
+                            take_profit=0.03, stop_loss=0.0075,
+                            confidence_threshold=0.9, timeframe=tf,
+                        )
+                        predictor.train(ohlcv_df, verbose=False)
+
+                        # Save to lightning_logs path (consistent with TrainAllWorker)
+                        save_path = Path(f"lightning_logs/models/checkpoints/{self.symbol}/ranknet_{tf}.pt")
+                        save_path.parent.mkdir(parents=True, exist_ok=True)
+                        predictor.save(str(save_path))
+                        tf_result['model_source'] = 'trained'
+                        print(f"[MultiTF] {self.symbol}@{tf}: Model trained and saved to {save_path}")
+                except Exception as e:
+                    tf_result['status'] = 'error'
+                    tf_result['error_msg'] = f"Model load/train failed: {str(e)}"
+                    print(f"[MultiTF] {self.symbol}@{tf}: Model error: {e}")
+                    results[tf] = tf_result
+                    continue
+
+                if self._stopped:
+                    return
+
+                # Phase 3: Run prediction
+                self.progress.emit(step_base + 2, total_steps,
+                    f"[{tf_idx+1}/{total_tf}] {tf}: Running prediction...")
+                try:
+                    pred_result = predictor.predict(ohlcv_df)
+                    tf_result['direction'] = pred_result['direction']
+                    tf_result['confidence'] = pred_result['confidence']
+                    tf_result['metrics'] = pred_result['metrics']
+                    tf_result['status'] = 'ok'
+                    print(f"[MultiTF] {self.symbol}@{tf}: {pred_result['direction']} "
+                          f"(conf={pred_result['confidence']:.2f}, "
+                          f"IC={pred_result['metrics'].get('ic', 0):.4f})")
+                except Exception as e:
+                    tf_result['status'] = 'error'
+                    tf_result['error_msg'] = f"Prediction failed: {str(e)}"
+
+                results[tf] = tf_result
+
+                # Free memory
+                del df, ohlcv_df
+                if predictor is not None:
+                    del predictor
+
+            if self._stopped:
+                return
+
+            # Compute consensus
+            directions = [r['direction'] for r in results.values() if r['status'] == 'ok']
+            if directions:
+                counts = Counter(directions)
+                consensus = counts.most_common(1)[0][0]
+                agreement = counts[consensus] / len(directions)
+            else:
+                consensus = 'NEUTRAL'
+                agreement = 0.0
+
+            analysis_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+
+            mtf_result = MultiTFResult(
+                symbol=self.symbol,
+                timeframe_results=results,
+                consensus_direction=consensus,
+                agreement_score=agreement,
+                analysis_time=analysis_time,
+            )
+
+            self.progress.emit(total_steps, total_steps, "Multi-TF analysis complete!")
+            self.result.emit(mtf_result)
+
+        except Exception as e:
+            self.error.emit(f"Multi-TF analysis failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.finished.emit()
+
+    def stop(self):
+        self._stopped = True
+
+
 class PredictionPanel(QWidget):
     """
     Prediction Panel with comprehensive strategy analysis.
@@ -732,12 +918,23 @@ class PredictionPanel(QWidget):
         super().__init__(parent)
         self._worker = None
         self._train_all_worker = None
+        self._multi_tf_worker = None
         self._result: Optional[PredictionResult] = None
         self._setup_ui()
 
     def _setup_ui(self):
         """Initialize the UI."""
-        layout = QVBoxLayout(self)
+        # Outer layout with scroll area
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet(f"QScrollArea {{ border: none; background-color: {COLORS['bg_dark']}; }}")
+
+        inner_widget = QWidget()
+        layout = QVBoxLayout(inner_widget)
         layout.setContentsMargins(16, 16, 16, 16)
 
         # Header
@@ -903,6 +1100,107 @@ class PredictionPanel(QWidget):
 
         splitter.setSizes([400, 600])
         layout.addWidget(splitter, stretch=1)
+
+        # ──── Multi-Timeframe RankNet Analysis Section ────
+        mtf_header = QLabel("Multi-Timeframe RankNet Analysis")
+        mtf_header.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {COLORS['accent']}; margin-top: 16px;")
+        layout.addWidget(mtf_header)
+
+        mtf_subtitle = QLabel("RankNet AI predictions across 5m, 15m, 30m, 1h, 4h timeframes")
+        mtf_subtitle.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        layout.addWidget(mtf_subtitle)
+
+        # Consensus summary
+        self.mtf_consensus_frame = QFrame()
+        self.mtf_consensus_frame.setStyleSheet(f"""
+            QFrame {{
+                border: 1px solid {COLORS['border']};
+                border-radius: 6px;
+                padding: 8px;
+                margin-top: 4px;
+            }}
+        """)
+        consensus_layout = QHBoxLayout(self.mtf_consensus_frame)
+        consensus_layout.setContentsMargins(12, 8, 12, 8)
+
+        consensus_layout.addWidget(QLabel("Consensus:"))
+        self.mtf_consensus_label = QLabel("--")
+        self.mtf_consensus_label.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {COLORS['text_secondary']}; border: none;")
+        consensus_layout.addWidget(self.mtf_consensus_label)
+
+        self.mtf_agreement_label = QLabel("Agreement: --")
+        self.mtf_agreement_label.setStyleSheet(f"font-size: 14px; color: {COLORS['text_secondary']}; border: none;")
+        consensus_layout.addWidget(self.mtf_agreement_label)
+
+        self.mtf_votes_label = QLabel("UP: - | DOWN: - | NEUTRAL: -")
+        self.mtf_votes_label.setStyleSheet(f"color: {COLORS['text_secondary']}; border: none;")
+        consensus_layout.addWidget(self.mtf_votes_label)
+
+        consensus_layout.addStretch()
+        layout.addWidget(self.mtf_consensus_frame)
+
+        # Multi-TF comparison table
+        mtf_table_group = QGroupBox("Timeframe Comparison")
+        mtf_table_layout = QVBoxLayout(mtf_table_group)
+
+        self.mtf_table = QTableWidget()
+        self.mtf_table.setColumnCount(9)
+        self.mtf_table.setHorizontalHeaderLabels([
+            'Timeframe', 'Direction', 'Confidence', 'IC (Spearman)',
+            'Dir. Accuracy', 'Sharpe', 'Win Rate', 'Trades', 'Status'
+        ])
+        self.mtf_table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {COLORS['bg_dark']};
+                color: {COLORS['text_primary']};
+                gridline-color: {COLORS['border']};
+            }}
+            QTableWidget::item {{
+                padding: 5px;
+            }}
+            QHeaderView::section {{
+                background-color: {COLORS['bg_medium']};
+                color: {COLORS['text_primary']};
+                padding: 5px;
+                border: 1px solid {COLORS['border']};
+            }}
+        """)
+        mtf_header_view = self.mtf_table.horizontalHeader()
+        mtf_header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        for i in range(1, 9):
+            mtf_header_view.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
+        self.mtf_table.setMinimumHeight(200)
+        mtf_table_layout.addWidget(self.mtf_table)
+
+        # Legend for status
+        mtf_legend = QHBoxLayout()
+        mtf_legend.addWidget(QLabel("Status:"))
+        loaded_lbl = QLabel(" LOADED ")
+        loaded_lbl.setStyleSheet(f"background-color: {COLORS['chart_green']}; color: white; padding: 2px 8px;")
+        mtf_legend.addWidget(loaded_lbl)
+        trained_lbl = QLabel(" TRAINED ")
+        trained_lbl.setStyleSheet(f"background-color: {COLORS['accent']}; color: white; padding: 2px 8px;")
+        mtf_legend.addWidget(trained_lbl)
+        error_lbl = QLabel(" ERROR ")
+        error_lbl.setStyleSheet(f"background-color: {COLORS['chart_red']}; color: white; padding: 2px 8px;")
+        mtf_legend.addWidget(error_lbl)
+        mtf_legend.addStretch()
+        mtf_table_layout.addLayout(mtf_legend)
+
+        layout.addWidget(mtf_table_group)
+
+        # Multi-TF progress
+        self.mtf_progress_bar = QProgressBar()
+        self.mtf_progress_bar.setVisible(False)
+        layout.addWidget(self.mtf_progress_bar)
+
+        self.mtf_status_label = QLabel("")
+        self.mtf_status_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        layout.addWidget(self.mtf_status_label)
+
+        # Finalize scroll area
+        scroll_area.setWidget(inner_widget)
+        outer_layout.addWidget(scroll_area)
 
     def _create_recommendation_panel(self) -> QWidget:
         """Create the recommendation display panel."""
@@ -1167,6 +1465,11 @@ class PredictionPanel(QWidget):
         if self._worker and self._worker.isRunning():
             return
 
+        # Stop any running multi-TF worker from previous analysis
+        if self._multi_tf_worker and self._multi_tf_worker.isRunning():
+            self._multi_tf_worker.stop()
+            self._multi_tf_worker.wait(2000)
+
         symbol = self.symbol_combo.currentText().strip().upper()
         if not symbol:
             self.status_label.setText("Please enter a symbol")
@@ -1200,6 +1503,8 @@ class PredictionPanel(QWidget):
         """Handle analysis result."""
         self._result = result
         self._display_results(result)
+        # Chain: start multi-TF analysis
+        self._start_multi_tf_analysis(result.symbol)
 
     def _on_error(self, error: str):
         """Handle error."""
@@ -1207,8 +1512,10 @@ class PredictionPanel(QWidget):
 
     def _on_finished(self):
         """Handle worker finished."""
-        self.analyze_btn.setEnabled(True)
         self.progress_bar.setVisible(False)
+        # Only re-enable if multi-TF is also not running
+        if not (self._multi_tf_worker and self._multi_tf_worker.isRunning()):
+            self.analyze_btn.setEnabled(True)
 
     def _clear_results(self):
         """Clear all result displays."""
@@ -1244,6 +1551,196 @@ class PredictionPanel(QWidget):
         self.ranknet_trades_label.setText("--")
         self.ranknet_equity_label.setText("--")
         self.ranknet_capital_label.setText("--")
+
+        # Clear multi-TF fields
+        self.mtf_table.setRowCount(0)
+        self.mtf_consensus_label.setText("--")
+        self.mtf_consensus_label.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {COLORS['text_secondary']}; border: none;")
+        self.mtf_agreement_label.setText("Agreement: --")
+        self.mtf_votes_label.setText("UP: - | DOWN: - | NEUTRAL: -")
+        self.mtf_status_label.setText("")
+
+    # ──── Multi-Timeframe Analysis Methods ────
+
+    def _start_multi_tf_analysis(self, symbol: str):
+        """Start multi-timeframe RankNet analysis after single-TF completes."""
+        if self._multi_tf_worker and self._multi_tf_worker.isRunning():
+            return
+
+        self.mtf_progress_bar.setVisible(True)
+        self.mtf_progress_bar.setValue(0)
+        self.mtf_status_label.setText(f"Starting multi-TF analysis for {symbol}...")
+        self.mtf_table.setRowCount(0)
+
+        # Reset consensus labels
+        self.mtf_consensus_label.setText("...")
+        self.mtf_consensus_label.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {COLORS['text_secondary']}; border: none;")
+        self.mtf_agreement_label.setText("Agreement: --")
+        self.mtf_votes_label.setText("UP: - | DOWN: - | NEUTRAL: -")
+
+        self._multi_tf_worker = MultiTFWorker(symbol)
+        self._multi_tf_worker.progress.connect(self._on_mtf_progress)
+        self._multi_tf_worker.result.connect(self._on_mtf_result)
+        self._multi_tf_worker.error.connect(self._on_mtf_error)
+        self._multi_tf_worker.finished.connect(self._on_mtf_finished)
+        self._multi_tf_worker.start()
+
+    def _on_mtf_progress(self, current: int, total: int, message: str):
+        """Handle multi-TF progress update."""
+        pct = int((current / max(total, 1)) * 100) if total > 0 else 0
+        self.mtf_progress_bar.setValue(pct)
+        self.mtf_status_label.setText(message)
+
+    def _on_mtf_result(self, result: MultiTFResult):
+        """Handle multi-TF analysis result."""
+        self._display_mtf_results(result)
+
+    def _on_mtf_error(self, error: str):
+        """Handle multi-TF error."""
+        self.mtf_status_label.setText(f"Multi-TF error: {error}")
+
+    def _on_mtf_finished(self):
+        """Handle multi-TF worker finished."""
+        self.mtf_progress_bar.setVisible(False)
+        # Re-enable analyze button only after BOTH workers complete
+        if not (self._worker and self._worker.isRunning()):
+            self.analyze_btn.setEnabled(True)
+
+    def _display_mtf_results(self, result: MultiTFResult):
+        """Display multi-timeframe RankNet results in the comparison table."""
+        from src.core.config import AppConfig
+
+        timeframes = list(AppConfig.MULTI_TIMEFRAMES)
+        self.mtf_table.setRowCount(len(timeframes))
+
+        dir_colors = {
+            'UP': COLORS['chart_green'],
+            'DOWN': COLORS['chart_red'],
+            'NEUTRAL': COLORS['text_secondary'],
+        }
+        dir_arrows = {'UP': '▲ UP', 'DOWN': '▼ DOWN', 'NEUTRAL': '◆ NEUTRAL'}
+
+        # Update consensus display
+        consensus_color = dir_colors.get(result.consensus_direction, COLORS['text_secondary'])
+        self.mtf_consensus_label.setText(dir_arrows.get(result.consensus_direction, result.consensus_direction))
+        self.mtf_consensus_label.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {consensus_color}; border: none;")
+
+        self.mtf_agreement_label.setText(f"Agreement: {result.agreement_score * 100:.0f}%")
+        if result.agreement_score >= 0.8:
+            self.mtf_agreement_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {COLORS['chart_green']}; border: none;")
+        elif result.agreement_score >= 0.6:
+            self.mtf_agreement_label.setStyleSheet(f"font-size: 14px; color: {COLORS['accent']}; border: none;")
+        else:
+            self.mtf_agreement_label.setStyleSheet(f"font-size: 14px; color: {COLORS['chart_red']}; border: none;")
+
+        # Count votes
+        up_count = sum(1 for v in result.timeframe_results.values() if v.get('direction') == 'UP')
+        down_count = sum(1 for v in result.timeframe_results.values() if v.get('direction') == 'DOWN')
+        neutral_count = sum(1 for v in result.timeframe_results.values() if v.get('direction') == 'NEUTRAL')
+        self.mtf_votes_label.setText(
+            f"UP: {up_count} | DOWN: {down_count} | NEUTRAL: {neutral_count}"
+        )
+
+        # Fill table rows
+        for row, tf in enumerate(timeframes):
+            tf_data = result.timeframe_results.get(tf, {})
+            status = tf_data.get('status', 'skipped')
+
+            # Timeframe column
+            tf_item = QTableWidgetItem(tf)
+            tf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            tf_item.setFont(QFont("", -1, QFont.Weight.Bold))
+            self.mtf_table.setItem(row, 0, tf_item)
+
+            if status != 'ok':
+                # Error/skipped row
+                err_msg = tf_data.get('error_msg', 'Skipped')
+                err_item = QTableWidgetItem(err_msg)
+                err_item.setForeground(QColor(COLORS['chart_red']))
+                self.mtf_table.setItem(row, 1, err_item)
+                for col in range(2, 8):
+                    dash_item = QTableWidgetItem("--")
+                    dash_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.mtf_table.setItem(row, col, dash_item)
+                status_item = QTableWidgetItem("ERROR")
+                status_item.setForeground(QColor(COLORS['chart_red']))
+                status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.mtf_table.setItem(row, 8, status_item)
+                continue
+
+            direction = tf_data.get('direction', '--')
+            confidence = tf_data.get('confidence', 0)
+            metrics = tf_data.get('metrics', {})
+
+            # Direction with color background
+            dir_item = QTableWidgetItem(dir_arrows.get(direction, direction))
+            if direction == 'UP':
+                dir_item.setBackground(QColor(COLORS['chart_green']))
+                dir_item.setForeground(QColor('white'))
+            elif direction == 'DOWN':
+                dir_item.setBackground(QColor(COLORS['chart_red']))
+                dir_item.setForeground(QColor('white'))
+            dir_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.mtf_table.setItem(row, 1, dir_item)
+
+            # Confidence
+            conf_item = QTableWidgetItem(f"{confidence * 100:.0f}%")
+            conf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.mtf_table.setItem(row, 2, conf_item)
+
+            # IC
+            ic_item = QTableWidgetItem(f"{metrics.get('ic', 0):.4f}")
+            ic_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.mtf_table.setItem(row, 3, ic_item)
+
+            # Directional Accuracy
+            da_val = metrics.get('directional_accuracy', 0)
+            da_item = QTableWidgetItem(f"{da_val * 100:.1f}%")
+            da_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if da_val > 0.55:
+                da_item.setForeground(QColor(COLORS['chart_green']))
+            elif da_val < 0.45:
+                da_item.setForeground(QColor(COLORS['chart_red']))
+            self.mtf_table.setItem(row, 4, da_item)
+
+            # Sharpe
+            sharpe_val = metrics.get('sharpe', 0)
+            sharpe_item = QTableWidgetItem(f"{sharpe_val:.2f}")
+            sharpe_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if sharpe_val > 0.5:
+                sharpe_item.setForeground(QColor(COLORS['chart_green']))
+            elif sharpe_val < 0:
+                sharpe_item.setForeground(QColor(COLORS['chart_red']))
+            self.mtf_table.setItem(row, 5, sharpe_item)
+
+            # Win Rate
+            wr_val = metrics.get('win_rate', 0)
+            wr_item = QTableWidgetItem(f"{wr_val * 100:.1f}%")
+            wr_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if wr_val > 0.55:
+                wr_item.setForeground(QColor(COLORS['chart_green']))
+            elif wr_val < 0.45:
+                wr_item.setForeground(QColor(COLORS['chart_red']))
+            self.mtf_table.setItem(row, 6, wr_item)
+
+            # Trades
+            trades_item = QTableWidgetItem(str(metrics.get('trades', 0)))
+            trades_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.mtf_table.setItem(row, 7, trades_item)
+
+            # Status column - show model source
+            source = tf_data.get('model_source', '?')
+            status_item = QTableWidgetItem(source.upper())
+            if source == 'trained':
+                status_item.setForeground(QColor(COLORS['accent']))
+            else:
+                status_item.setForeground(QColor(COLORS['chart_green']))
+            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.mtf_table.setItem(row, 8, status_item)
+
+        self.mtf_status_label.setText(
+            f"Multi-TF analysis complete for {result.symbol} at {result.analysis_time}"
+        )
 
     def _display_results(self, result: PredictionResult):
         """Display the analysis results."""

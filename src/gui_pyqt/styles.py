@@ -1,32 +1,45 @@
 """
-PyQt6 Stylesheet - Dark Theme
+PyQt6 Stylesheet - Minimalist Dark Theme
 
-Professional dark theme for the Crypto AI Predictor application.
+Clean, refined dark theme for the Crypto AI Predictor application.
 """
 
-# Color Palette
+# Color Palette — Minimalist
 COLORS = {
-    'bg_dark': '#1e1e1e',
-    'bg_medium': '#2d2d2d',
-    'bg_light': '#3d3d3d',
-    'bg_lighter': '#4d4d4d',
-    'primary': '#0d47a1',
-    'primary_hover': '#1565c0',
-    'primary_pressed': '#0a3d91',
-    'success': '#2e7d32',
-    'success_hover': '#388e3c',
-    'danger': '#c62828',
-    'danger_hover': '#d32f2f',
-    'warning': '#f57c00',
-    'text_primary': '#e0e0e0',
-    'text_secondary': '#9e9e9e',
-    'text_disabled': '#666666',
-    'accent': '#4fc3f7',
-    'border': '#404040',
-    'scrollbar': '#555555',
-    'scrollbar_hover': '#666666',
-    'chart_green': '#4caf50',
-    'chart_red': '#f44336',
+    # Backgrounds: deep, near-black with subtle layering
+    'bg_dark': '#0e0e11',
+    'bg_medium': '#17171c',
+    'bg_light': '#21212a',
+    'bg_lighter': '#2b2b35',
+
+    # Primary: refined indigo
+    'primary': '#635bff',
+    'primary_hover': '#7a73ff',
+    'primary_pressed': '#534cc9',
+
+    # Semantic: soft, non-aggressive
+    'success': '#3ecf8e',
+    'success_hover': '#54d9a0',
+    'danger': '#f87171',
+    'danger_hover': '#fca5a5',
+    'warning': '#eab308',
+
+    # Text: clean hierarchy
+    'text_primary': '#dfdfe3',
+    'text_secondary': '#6e6e7a',
+    'text_disabled': '#3e3e47',
+
+    # Accent: soft periwinkle for headers & highlights
+    'accent': '#a5b4fc',
+
+    # Borders & chrome
+    'border': '#24242e',
+    'scrollbar': '#2e2e3a',
+    'scrollbar_hover': '#3e3e4c',
+
+    # Chart: clear but soft
+    'chart_green': '#3ecf8e',
+    'chart_red': '#f87171',
 }
 
 # Font Configuration
@@ -43,7 +56,7 @@ FONTS = {
 # Main Stylesheet
 DARK_STYLESHEET = f"""
 /* ============================================== */
-/* GLOBAL STYLES                                  */
+/* GLOBAL                                         */
 /* ============================================== */
 
 QMainWindow {{
@@ -58,33 +71,34 @@ QWidget {{
 }}
 
 /* ============================================== */
-/* TAB WIDGET                                     */
+/* TABS                                           */
 /* ============================================== */
 
 QTabWidget::pane {{
     border: none;
     background-color: {COLORS['bg_dark']};
-    padding: 5px;
+    padding: 4px;
 }}
 
 QTabBar::tab {{
-    background-color: {COLORS['bg_medium']};
-    color: {COLORS['text_primary']};
-    padding: 12px 24px;
+    background-color: transparent;
+    color: {COLORS['text_secondary']};
+    padding: 10px 22px;
     border: none;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
+    border-bottom: 2px solid transparent;
     margin-right: 2px;
     font-size: {FONTS['size_normal']}pt;
 }}
 
 QTabBar::tab:selected {{
-    background-color: {COLORS['bg_light']};
+    color: {COLORS['text_primary']};
+    border-bottom: 2px solid {COLORS['primary']};
     font-weight: bold;
 }}
 
 QTabBar::tab:hover:!selected {{
-    background-color: {COLORS['bg_lighter']};
+    color: {COLORS['text_primary']};
+    border-bottom: 2px solid {COLORS['border']};
 }}
 
 /* ============================================== */
@@ -95,11 +109,11 @@ QPushButton {{
     background-color: {COLORS['primary']};
     color: white;
     border: none;
-    padding: 10px 20px;
-    border-radius: 4px;
-    font-weight: bold;
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-weight: 600;
     font-size: {FONTS['size_normal']}pt;
-    min-width: 80px;
+    min-width: 72px;
 }}
 
 QPushButton:hover {{
@@ -117,6 +131,7 @@ QPushButton:disabled {{
 
 QPushButton[class="success"] {{
     background-color: {COLORS['success']};
+    color: #0e0e11;
 }}
 
 QPushButton[class="success"]:hover {{
@@ -132,14 +147,14 @@ QPushButton[class="danger"]:hover {{
 }}
 
 /* ============================================== */
-/* INPUT FIELDS                                   */
+/* INPUTS                                         */
 /* ============================================== */
 
 QLineEdit {{
     background-color: {COLORS['bg_light']};
     border: 1px solid {COLORS['border']};
-    border-radius: 4px;
-    padding: 8px 12px;
+    border-radius: 6px;
+    padding: 7px 12px;
     color: {COLORS['text_primary']};
     font-size: {FONTS['size_normal']}pt;
 }}
@@ -156,8 +171,8 @@ QLineEdit:disabled {{
 QSpinBox, QDoubleSpinBox {{
     background-color: {COLORS['bg_light']};
     border: 1px solid {COLORS['border']};
-    border-radius: 4px;
-    padding: 6px 10px;
+    border-radius: 6px;
+    padding: 5px 10px;
     color: {COLORS['text_primary']};
 }}
 
@@ -175,8 +190,8 @@ QSpinBox::down-button, QDoubleSpinBox::down-button {{
 QComboBox {{
     background-color: {COLORS['bg_light']};
     border: 1px solid {COLORS['border']};
-    border-radius: 4px;
-    padding: 8px 12px;
+    border-radius: 6px;
+    padding: 7px 12px;
     color: {COLORS['text_primary']};
     min-width: 120px;
 }}
@@ -187,26 +202,28 @@ QComboBox:hover {{
 
 QComboBox::drop-down {{
     border: none;
-    width: 30px;
+    width: 28px;
 }}
 
 QComboBox::down-arrow {{
     image: none;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid {COLORS['text_primary']};
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {COLORS['text_secondary']};
     margin-right: 10px;
 }}
 
 QComboBox QAbstractItemView {{
     background-color: {COLORS['bg_medium']};
     border: 1px solid {COLORS['border']};
+    border-radius: 6px;
     selection-background-color: {COLORS['primary']};
     selection-color: white;
+    padding: 4px;
 }}
 
 /* ============================================== */
-/* TABLE VIEW                                     */
+/* TABLES                                         */
 /* ============================================== */
 
 QTableView {{
@@ -214,13 +231,13 @@ QTableView {{
     alternate-background-color: {COLORS['bg_medium']};
     gridline-color: {COLORS['border']};
     border: 1px solid {COLORS['border']};
-    border-radius: 4px;
+    border-radius: 6px;
     selection-background-color: {COLORS['primary']};
     selection-color: white;
 }}
 
 QTableView::item {{
-    padding: 8px;
+    padding: 6px;
     border-bottom: 1px solid {COLORS['border']};
 }}
 
@@ -230,15 +247,17 @@ QTableView::item:selected {{
 
 QHeaderView::section {{
     background-color: {COLORS['bg_medium']};
-    color: {COLORS['text_primary']};
-    padding: 10px;
+    color: {COLORS['text_secondary']};
+    padding: 8px;
     border: none;
-    border-bottom: 2px solid {COLORS['primary']};
-    font-weight: bold;
+    border-bottom: 1px solid {COLORS['border']};
+    font-weight: 600;
+    font-size: {FONTS['size_small']}pt;
+    text-transform: uppercase;
 }}
 
 QHeaderView::section:hover {{
-    background-color: {COLORS['bg_light']};
+    color: {COLORS['text_primary']};
 }}
 
 /* ============================================== */
@@ -246,14 +265,14 @@ QHeaderView::section:hover {{
 /* ============================================== */
 
 QScrollBar:vertical {{
-    background-color: {COLORS['bg_dark']};
-    width: 12px;
+    background-color: transparent;
+    width: 8px;
     border: none;
 }}
 
 QScrollBar::handle:vertical {{
     background-color: {COLORS['scrollbar']};
-    border-radius: 6px;
+    border-radius: 4px;
     min-height: 30px;
     margin: 2px;
 }}
@@ -267,14 +286,14 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
 }}
 
 QScrollBar:horizontal {{
-    background-color: {COLORS['bg_dark']};
-    height: 12px;
+    background-color: transparent;
+    height: 8px;
     border: none;
 }}
 
 QScrollBar::handle:horizontal {{
     background-color: {COLORS['scrollbar']};
-    border-radius: 6px;
+    border-radius: 4px;
     min-width: 30px;
     margin: 2px;
 }}
@@ -296,8 +315,9 @@ QProgressBar {{
     border: none;
     border-radius: 4px;
     text-align: center;
-    height: 24px;
-    font-weight: bold;
+    height: 20px;
+    font-weight: 600;
+    font-size: {FONTS['size_small']}pt;
 }}
 
 QProgressBar::chunk {{
@@ -317,8 +337,8 @@ QLabel {{
 QLabel[class="header"] {{
     font-size: {FONTS['size_header']}pt;
     font-weight: bold;
-    color: {COLORS['accent']};
-    padding: 10px 0px;
+    color: {COLORS['text_primary']};
+    padding: 8px 0px;
 }}
 
 QLabel[class="title"] {{
@@ -340,9 +360,9 @@ QCheckBox {{
 }}
 
 QCheckBox::indicator {{
-    width: 18px;
-    height: 18px;
-    border: 2px solid {COLORS['border']};
+    width: 16px;
+    height: 16px;
+    border: 1px solid {COLORS['border']};
     border-radius: 4px;
     background-color: {COLORS['bg_light']};
 }}
@@ -362,10 +382,10 @@ QRadioButton {{
 }}
 
 QRadioButton::indicator {{
-    width: 18px;
-    height: 18px;
-    border: 2px solid {COLORS['border']};
-    border-radius: 9px;
+    width: 16px;
+    height: 16px;
+    border: 1px solid {COLORS['border']};
+    border-radius: 8px;
     background-color: {COLORS['bg_light']};
 }}
 
@@ -380,27 +400,30 @@ QRadioButton::indicator:checked {{
 
 QGroupBox {{
     border: 1px solid {COLORS['border']};
-    border-radius: 6px;
-    margin-top: 12px;
+    border-radius: 8px;
+    margin-top: 14px;
     padding-top: 10px;
-    font-weight: bold;
+    font-weight: 600;
 }}
 
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    padding: 0 10px;
-    color: {COLORS['accent']};
+    padding: 0 8px;
+    color: {COLORS['text_secondary']};
+    font-size: {FONTS['size_small']}pt;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }}
 
 /* ============================================== */
-/* TEXT EDIT                                      */
+/* TEXT EDIT                                       */
 /* ============================================== */
 
 QTextEdit, QPlainTextEdit {{
     background-color: {COLORS['bg_light']};
     border: 1px solid {COLORS['border']};
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 8px;
     color: {COLORS['text_primary']};
     font-family: {FONTS['mono']};
@@ -413,16 +436,16 @@ QTextEdit, QPlainTextEdit {{
 
 QSlider::groove:horizontal {{
     background-color: {COLORS['bg_light']};
-    height: 8px;
-    border-radius: 4px;
+    height: 6px;
+    border-radius: 3px;
 }}
 
 QSlider::handle:horizontal {{
     background-color: {COLORS['primary']};
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     margin: -5px 0;
-    border-radius: 9px;
+    border-radius: 8px;
 }}
 
 QSlider::handle:horizontal:hover {{
@@ -431,7 +454,7 @@ QSlider::handle:horizontal:hover {{
 
 QSlider::sub-page:horizontal {{
     background-color: {COLORS['primary']};
-    border-radius: 4px;
+    border-radius: 3px;
 }}
 
 /* ============================================== */
@@ -443,23 +466,23 @@ QSplitter::handle {{
 }}
 
 QSplitter::handle:horizontal {{
-    width: 4px;
+    width: 1px;
 }}
 
 QSplitter::handle:vertical {{
-    height: 4px;
+    height: 1px;
 }}
 
 /* ============================================== */
-/* TOOL TIP                                       */
+/* TOOLTIP                                        */
 /* ============================================== */
 
 QToolTip {{
     background-color: {COLORS['bg_medium']};
     color: {COLORS['text_primary']};
     border: 1px solid {COLORS['border']};
-    border-radius: 4px;
-    padding: 6px;
+    border-radius: 6px;
+    padding: 6px 10px;
 }}
 
 /* ============================================== */
@@ -470,6 +493,7 @@ QStatusBar {{
     background-color: {COLORS['bg_medium']};
     color: {COLORS['text_secondary']};
     border-top: 1px solid {COLORS['border']};
+    font-size: {FONTS['size_small']}pt;
 }}
 
 QStatusBar::item {{
@@ -488,15 +512,19 @@ QMenuBar {{
 
 QMenuBar::item:selected {{
     background-color: {COLORS['bg_light']};
+    border-radius: 4px;
 }}
 
 QMenu {{
     background-color: {COLORS['bg_medium']};
     border: 1px solid {COLORS['border']};
+    border-radius: 6px;
+    padding: 4px;
 }}
 
 QMenu::item {{
-    padding: 8px 30px;
+    padding: 6px 28px;
+    border-radius: 4px;
 }}
 
 QMenu::item:selected {{

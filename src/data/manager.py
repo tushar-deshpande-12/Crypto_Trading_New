@@ -57,7 +57,62 @@ class DataManager:
         logger.info(f"Saved features to {dataset_path}")
         return dataset_path
     
-    def fetch_and_save_multiple(self, symbols: List[str], max_candles: int = 10000, 
+    def fetch_and_save_multi_timeframe(self, symbol: str, timeframes: List[str] = None,
+                                       max_candles: int = 50000,
+                                       progress_callback: Optional[Callable] = None) -> Dict[str, Optional[Path]]:
+        """Fetch data for multiple timeframes and save each separately.
+
+        Args:
+            symbol: Trading pair (e.g., "BTCUSDT")
+            timeframes: List of timeframes to fetch (default: 5m, 15m, 30m, 1h, 4h)
+            max_candles: Number of candles per timeframe (default: 50000)
+            progress_callback: Callback(current, total, message)
+
+        Returns:
+            Dict mapping timeframe -> saved dataset path (or None on failure)
+        """
+        from src.core.config import AppConfig
+        if timeframes is None:
+            timeframes = list(AppConfig.MULTI_TIMEFRAMES)
+
+        results = {}
+        total_timeframes = len(timeframes)
+
+        for tf_idx, tf in enumerate(timeframes):
+            if progress_callback:
+                overall_pct = int((tf_idx / total_timeframes) * 100)
+                progress_callback(overall_pct, 100, f"[{tf_idx+1}/{total_timeframes}] Fetching {symbol} @ {tf}...")
+
+            # Switch fetcher interval for this timeframe
+            self.fetcher.interval = tf
+            original_interval = self.interval
+            self.interval = tf
+
+            try:
+                path = self.fetch_and_save(
+                    symbol=symbol,
+                    max_candles=max_candles,
+                    progress_callback=None,  # Use our own progress above
+                    metadata={'interval': tf, 'timeframe': tf}
+                )
+                results[tf] = path
+                if path:
+                    logger.info(f"Saved {tf} data for {symbol} -> {path}")
+                else:
+                    logger.warning(f"Failed to fetch {tf} data for {symbol}")
+            except Exception as e:
+                logger.error(f"Error fetching {tf} for {symbol}: {e}")
+                results[tf] = None
+            finally:
+                self.interval = original_interval
+                self.fetcher.interval = original_interval
+
+        if progress_callback:
+            progress_callback(100, 100, f"Completed all {total_timeframes} timeframes for {symbol}")
+
+        return results
+
+    def fetch_and_save_multiple(self, symbols: List[str], max_candles: int = 10000,
                                progress_callback: Optional[Callable] = None) -> Dict[str, Optional[Path]]:
         """Batch fetch multiple symbols."""
         results = {}

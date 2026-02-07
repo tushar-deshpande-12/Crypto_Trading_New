@@ -14,19 +14,21 @@ from src.core.config import AppConfig
 
 def main():
     print("=" * 80)
-    print("QUICK DATA FETCH FOR TRAINING")
+    print("QUICK MULTI-TIMEFRAME DATA FETCH FOR TRAINING")
     print("=" * 80)
     print()
-    print("This will download enough data for volatility-enhanced training")
-    print("Recommended: 5,000-50,000 candles per symbol")
+    print("Downloads 50,000 candles per timeframe for multiple timeframes")
     print()
 
     # Default symbols
     symbols = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT']
-    candles = 5000  # Minimum for volatility features
+    candles = 50000
+    timeframes = list(AppConfig.MULTI_TIMEFRAMES)
 
-    print(f"Symbols: {', '.join(symbols)}")
-    print(f"Candles per symbol: {candles:,}")
+    print(f"Symbols:    {', '.join(symbols)}")
+    print(f"Timeframes: {', '.join(timeframes)}")
+    print(f"Candles:    {candles:,} per timeframe")
+    print(f"Total:      {candles * len(timeframes):,} candles per symbol")
     print()
 
     response = input("Continue? (y/n): ")
@@ -40,36 +42,44 @@ def main():
         interval="1h"
     )
 
-    # Fetch data for each symbol
+    # Fetch data for each symbol across all timeframes
     for i, symbol in enumerate(symbols, 1):
-        print(f"\n[{i}/{len(symbols)}] Fetching {symbol}...")
+        print(f"\n[{i}/{len(symbols)}] Fetching {symbol} across {len(timeframes)} timeframes...")
         print("-" * 80)
 
-        def progress(current, total, message):
-            pct = (current / total * 100) if total > 0 else 0
-            print(f"  Progress: {current:,}/{total:,} ({pct:.1f}%) - {message}")
+        for tf_idx, tf in enumerate(timeframes):
+            print(f"\n  [{tf_idx+1}/{len(timeframes)}] {symbol} @ {tf}...")
 
-        try:
-            dataset_path = data_manager.fetch_and_save(
-                symbol=symbol,
-                max_candles=candles,
-                progress_callback=progress
-            )
+            # Switch fetcher interval
+            data_manager.fetcher.interval = tf
+            data_manager.interval = tf
 
-            if dataset_path:
-                print(f"[OK] Saved to: {dataset_path}")
-            else:
-                print(f"[X] Failed to fetch {symbol}")
+            def progress(current, total, message):
+                pct = (current / total * 100) if total > 0 else 0
+                print(f"    Progress: {current:,}/{total:,} ({pct:.1f}%) - {message}")
 
-        except Exception as e:
-            print(f"[X] Error fetching {symbol}: {e}")
-            import traceback
-            traceback.print_exc()
+            try:
+                dataset_path = data_manager.fetch_and_save(
+                    symbol=symbol,
+                    max_candles=candles,
+                    progress_callback=progress,
+                    metadata={'interval': tf, 'timeframe': tf}
+                )
+
+                if dataset_path:
+                    print(f"  [OK] {tf} saved to: {dataset_path}")
+                else:
+                    print(f"  [X] Failed to fetch {symbol} @ {tf}")
+
+            except Exception as e:
+                print(f"  [X] Error fetching {symbol} @ {tf}: {e}")
+                import traceback
+                traceback.print_exc()
 
     data_manager.close()
 
     print("\n" + "=" * 80)
-    print("DATA FETCH COMPLETE")
+    print("MULTI-TIMEFRAME DATA FETCH COMPLETE")
     print("=" * 80)
     print()
     print("Next steps:")

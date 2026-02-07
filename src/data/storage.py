@@ -76,10 +76,11 @@ class DataStorage:
             symbol_dir = self.base_dir / symbol
             symbol_dir.mkdir(parents=True, exist_ok=True)
 
-            # Generate dataset directory name with timestamp and candle count
+            # Generate dataset directory name with timestamp, interval and candle count
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             candle_count = len(data)
-            dataset_name = f"{timestamp}_{candle_count}candles"
+            interval = metadata.get('interval', '1h') if metadata else data[0].get('interval', '1h') if data else '1h'
+            dataset_name = f"{timestamp}_{interval}_{candle_count}candles"
             dataset_dir = symbol_dir / dataset_name
 
             # Check if dataset already exists (shouldn't happen with timestamp, but be safe)

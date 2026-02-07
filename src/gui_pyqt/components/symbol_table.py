@@ -23,6 +23,7 @@ class SymbolTableModel(QAbstractTableModel):
     Model for symbol table data.
 
     Columns: Symbol, Price, Change%, Volume, Actions
+    Supports both crypto (USD) and stocks (INR) markets.
     """
 
     COLUMNS = ['Symbol', 'Price', 'Change %', 'Volume 24h', 'Actions']
@@ -30,6 +31,12 @@ class SymbolTableModel(QAbstractTableModel):
     def __init__(self):
         super().__init__()
         self._data: List[Dict] = []
+        self._market_type = "crypto"  # "crypto" or "stocks"
+
+    def set_market_type(self, market_type: str):
+        """Set the market type for currency formatting"""
+        self._market_type = market_type
+        self.layoutChanged.emit()
 
     def rowCount(self, parent=QModelIndex()):
         return len(self._data)
@@ -54,25 +61,27 @@ class SymbolTableModel(QAbstractTableModel):
                 return row_data.get('symbol', '')
             elif col == 1:  # Price
                 price = row_data.get('price', 0)
+                currency = "₹" if self._market_type == "stocks" else "$"
                 if price >= 1000:
-                    return f"${price:,.2f}"
+                    return f"{currency}{price:,.2f}"
                 elif price >= 1:
-                    return f"${price:.4f}"
+                    return f"{currency}{price:.4f}"
                 else:
-                    return f"${price:.8f}"
+                    return f"{currency}{price:.8f}"
             elif col == 2:  # Change %
                 change = row_data.get('price_change_pct', 0)
                 return f"{change:+.2f}%"
             elif col == 3:  # Volume
                 vol = row_data.get('quote_volume_24h', 0)
+                currency = "₹" if self._market_type == "stocks" else "$"
                 if vol >= 1_000_000_000:
-                    return f"${vol/1_000_000_000:.2f}B"
+                    return f"{currency}{vol/1_000_000_000:.2f}B"
                 elif vol >= 1_000_000:
-                    return f"${vol/1_000_000:.2f}M"
+                    return f"{currency}{vol/1_000_000:.2f}M"
                 elif vol >= 1_000:
-                    return f"${vol/1_000:.2f}K"
+                    return f"{currency}{vol/1_000:.2f}K"
                 else:
-                    return f"${vol:.2f}"
+                    return f"{currency}{vol:.2f}"
             elif col == 4:  # Actions
                 return "Chart | Download"
 
@@ -273,3 +282,7 @@ class SymbolTable(QWidget):
         """Clear all data"""
         self.model.setData([])
         self._update_info_label()
+
+    def set_market_type(self, market_type: str):
+        """Set market type for currency display (crypto/stocks)"""
+        self.model.set_market_type(market_type)

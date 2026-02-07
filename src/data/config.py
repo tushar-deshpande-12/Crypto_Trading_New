@@ -21,7 +21,8 @@ class DataPipelineConfig:
 
     # Fetching Configuration
     default_interval: str = "1h"  # Candlestick interval
-    default_max_candles: int = 10000  # ~13.7 months for 1h interval
+    default_max_candles: int = 50000  # 50K candles per timeframe
+    multi_timeframes: tuple = ("5m", "15m", "30m", "1h", "4h")
     quote_asset: str = "USDT"  # Primary quote asset
 
     # Rate Limiting

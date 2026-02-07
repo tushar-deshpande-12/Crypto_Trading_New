@@ -11,7 +11,8 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QTabWidget, QSplitter, QStatusBar, QMessageBox, QFrame, QApplication
+    QTabWidget, QSplitter, QStatusBar, QMessageBox, QFrame, QApplication,
+    QPushButton
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -24,11 +25,12 @@ from src.gui_pyqt.components import (
 )
 from src.gui_pyqt.components.trading_panel import TradingPanel
 from src.gui_pyqt.workers import (
-    MarketDataWorker, ChartDataWorker, CCXTChartWorker, DataFetchWorker,
-    TrainingWorker, PredictionWorker, BacktestWorker, SignalScannerWorker,
-    TrainAllWorker, AISignalScannerWorker
+    MarketDataWorker, StockMarketDataWorker, ChartDataWorker, CCXTChartWorker,
+    DataFetchWorker, TrainingWorker, PredictionWorker, BacktestWorker,
+    SignalScannerWorker, TrainAllWorker, AISignalScannerWorker
 )
 from src.api.binance_client import BinanceAPIClient
+from src.api.nse_client import NSEAPIClient
 from src.data.manager import DataManager
 
 # Suppress common PyTorch warnings
@@ -69,8 +71,15 @@ class CryptoAIPredictorApp(QMainWindow):
         # Apply dark theme
         apply_stylesheet(self)
 
-        # API and Data clients
-        self.api_client = BinanceAPIClient()
+        # Market type state
+        self.market_type = "crypto"  # "crypto" or "stocks"
+
+        # API clients
+        self.crypto_api_client = BinanceAPIClient()
+        self.stock_api_client = NSEAPIClient()
+        self.api_client = self.crypto_api_client  # Current active client
+
+        # Data manager
         self.data_manager = DataManager(
             storage_dir=AppConfig.DATASET_DIR,
             interval=AppConfig.DEFAULT_INTERVAL
@@ -139,6 +148,59 @@ class CryptoAIPredictorApp(QMainWindow):
         layout.addWidget(version)
 
         layout.addStretch()
+
+        # Market type toggle
+        market_label = QLabel("Market:")
+        market_label.setStyleSheet("color: white; font-size: 12px;")
+        layout.addWidget(market_label)
+
+        # Crypto button
+        self.crypto_btn = QPushButton("Crypto")
+        self.crypto_btn.setCheckable(True)
+        self.crypto_btn.setChecked(True)
+        self.crypto_btn.setFixedWidth(80)
+        self.crypto_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #4caf50;
+            }
+            QPushButton:hover {
+                background-color: #388e3c;
+            }
+        """)
+        self.crypto_btn.clicked.connect(lambda: self._switch_market("crypto"))
+        layout.addWidget(self.crypto_btn)
+
+        # Stocks button
+        self.stocks_btn = QPushButton("Stocks")
+        self.stocks_btn.setCheckable(True)
+        self.stocks_btn.setChecked(False)
+        self.stocks_btn.setFixedWidth(80)
+        self.stocks_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1565c0;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px;
+                font-weight: bold;
+            }
+            QPushButton:checked {
+                background-color: #1976d2;
+            }
+            QPushButton:hover {
+                background-color: #1976d2;
+            }
+        """)
+        self.stocks_btn.clicked.connect(lambda: self._switch_market("stocks"))
+        layout.addWidget(self.stocks_btn)
 
         return header
 
@@ -301,17 +363,91 @@ class CryptoAIPredictorApp(QMainWindow):
         """Update status bar message"""
         self.status_label.setText(message)
 
-    def _load_market_data(self):
-        """Load market data from Binance"""
-        self._update_status("Loading market data...")
+    def _switch_market(self, market_type: str):
+        """Switch between crypto and stocks market"""
+        if market_type == self.market_type:
+            return
 
-        worker = MarketDataWorker(self.api_client)
+        self.market_type = market_type
+
+        # Update button states
+        self.crypto_btn.setChecked(market_type == "crypto")
+        self.stocks_btn.setChecked(market_type == "stocks")
+
+        # Switch API client
+        if market_type == "crypto":
+            self.api_client = self.crypto_api_client
+            self._update_status("Switched to Crypto market")
+        else:
+            self.api_client = self.stock_api_client
+            self._update_status("Switched to Stocks (NSE) market")
+
+        # Update symbol tables for currency display
+        self.symbol_table.set_market_type(market_type)
+        self.data_symbol_table.set_market_type(market_type)
+
+        # Clear current data
+        self.market_data = []
+        self.symbol_table.clear()
+        self.data_symbol_table.clear()
+
+        # Reload market data for new market type
+        self._load_market_data()
+
+    def _load_market_data(self):
+        """Load market data based on current market type"""
+        if self.market_type == "crypto":
+            self._load_crypto_market_data()
+        else:
+            self._load_stock_market_data()
+
+    def _load_crypto_market_data(self):
+        """Load market data from Binance"""
+        self._update_status("Loading crypto market data...")
+
+        worker = MarketDataWorker(self.crypto_api_client)
         worker.result.connect(self._on_market_data_loaded)
         worker.error.connect(self._on_market_data_error)
         worker.finished.connect(lambda: self._cleanup_worker(worker))
 
         self._active_workers.append(worker)
         worker.start()
+
+    def _load_stock_market_data(self):
+        """Load market data from NSE India"""
+        self._update_status("Loading NSE stock market data...")
+
+        worker = StockMarketDataWorker(self.stock_api_client)
+        worker.result.connect(self._on_stock_data_loaded)
+        worker.error.connect(self._on_market_data_error)
+        worker.finished.connect(lambda: self._cleanup_worker(worker))
+
+        self._active_workers.append(worker)
+        worker.start()
+
+    def _on_stock_data_loaded(self, data: List[Dict]):
+        """Handle loaded stock market data"""
+        self.market_data = data
+        self.symbol_table.load_data(data)
+        self.data_symbol_table.load_data(data)
+        self.symbol_count_label.setText(f"Stocks: {len(data)}")
+        self._update_status(f"Loaded {len(data)} NSE stocks")
+
+        # Update panels with stock symbols
+        try:
+            from src.gui_pyqt.utils.stock_symbols import get_all_stock_symbols
+            all_symbols = get_all_stock_symbols()
+            self.backtest_panel.set_symbols(all_symbols)
+            self.prediction_panel.set_symbols(all_symbols)
+            self.directional_backtest_panel.set_symbols(all_symbols)
+        except Exception as e:
+            symbols = [d.get('symbol', '') for d in data]
+            self.backtest_panel.set_symbols(symbols)
+            self.prediction_panel.set_symbols(symbols)
+            self.directional_backtest_panel.set_symbols(symbols)
+
+        # Update signal scanner with stock data
+        self.signal_scanner_panel.set_market_data(data)
 
     def _on_market_data_loaded(self, data: List[Dict]):
         """Handle loaded market data"""
@@ -418,11 +554,15 @@ class CryptoAIPredictorApp(QMainWindow):
         self._update_status(f"Ready to fetch data for {symbol_data.get('symbol')}")
 
     def _on_fetch_data(self, symbol_data: Dict, max_candles: int):
-        """Handle data fetch request"""
+        """Handle data fetch request - downloads multiple timeframes"""
+        from src.core.config import AppConfig
         symbol = symbol_data.get('symbol', '')
-        self._update_status(f"Fetching {max_candles} candles for {symbol}...")
+        timeframes = AppConfig.MULTI_TIMEFRAMES
+        self._update_status(f"Fetching {max_candles:,} candles x {len(timeframes)} timeframes for {symbol}...")
         self.data_panel.set_fetching(True)
-        self.data_panel.log(f"Starting fetch for {symbol} ({max_candles} candles)")
+        self.data_panel.log(f"Starting multi-timeframe fetch for {symbol}")
+        self.data_panel.log(f"  Timeframes: {', '.join(timeframes)}")
+        self.data_panel.log(f"  Candles per timeframe: {max_candles:,}")
 
         worker = DataFetchWorker(self.api_client, self.data_manager, symbol, max_candles)
         worker.progress.connect(self._on_fetch_progress)

@@ -26,11 +26,9 @@ class DataPanel(QWidget):
     fetch_requested = pyqtSignal(dict, int)
 
     CANDLE_OPTIONS = [
-        ("1,000 candles (~6 weeks)", 1000),
-        ("5,000 candles (~7 months)", 5000),
-        ("10,000 candles (~14 months)", 10000),
-        ("25,000 candles (~3 years)", 25000),
-        ("50,000 candles (~6 years)", 50000),
+        ("10,000 candles per timeframe", 10000),
+        ("25,000 candles per timeframe", 25000),
+        ("50,000 candles per timeframe (Recommended)", 50000),
     ]
 
     def __init__(self, parent=None):
@@ -70,14 +68,19 @@ class DataPanel(QWidget):
         config_group = QGroupBox("Download Configuration")
         config_layout = QVBoxLayout(config_group)
 
+        # Multi-timeframe info
+        tf_label = QLabel("Timeframes: 5m, 15m, 30m, 1h, 4h")
+        tf_label.setProperty("class", "secondary")
+        config_layout.addWidget(tf_label)
+
         # Candle count selector
         count_layout = QHBoxLayout()
-        count_layout.addWidget(QLabel("Data Amount:"))
+        count_layout.addWidget(QLabel("Candles per TF:"))
 
         self.candle_combo = QComboBox()
         for label, _ in self.CANDLE_OPTIONS:
             self.candle_combo.addItem(label)
-        self.candle_combo.setCurrentIndex(2)  # Default to 10,000
+        self.candle_combo.setCurrentIndex(2)  # Default to 50,000
         count_layout.addWidget(self.candle_combo, stretch=1)
 
         config_layout.addLayout(count_layout)
